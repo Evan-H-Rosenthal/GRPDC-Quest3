@@ -1,0 +1,62 @@
+# Unity generated folders
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Ll]ogs/
+[Mm]emoryCaptures/
+[Rr]ecordings/
+[Uu]serSettings/
+
+# IDE and OS files
+.vs/
+.vsconfig
+.vscode/
+.idea/
+*.csproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+*.DS_Store
+Thumbs.db
+
+# Build outputs
+[Bb]uild/
+[Bb]uilds/
+*.apk
+*.aab
+*.ap_
+*.unitypackage
+*.symbols.zip
+
+# Unity/IL2CPP export artifacts
+ExportedObj/
+*.gradle
+.gradle/
+.dotnet/
+.utmp/
+*_BackUpThisFolder_ButDontShipItWithYourGame/
+*_BurstDebugInformation_DoNotShip/
+
+# Crash and log output
+sysinfo.txt
+*.stacktrace
+*.log
+
+# Android signing files
+*.keystore
+*.jks
+*.pem
+
+# Rider / JetBrains caches
+.idea/
+
+# Visual Studio Code generated workspace storage
+.history/
