@@ -41,6 +41,7 @@ public class CameraFeedViewer : MonoBehaviour
         public bool HasSmoothedPose;
         public Vector3 SmoothedPosition;
         public Quaternion SmoothedRotation;
+        public float LastVisibleTime;
 
         public void SetActive(bool active)
         {
@@ -48,7 +49,22 @@ public class CameraFeedViewer : MonoBehaviour
             {
                 Root.SetActive(active);
             }
+
+            if (!active)
+            {
+                HasSmoothedPose = false;
+            }
         }
+    }
+
+    class TrackedMarkerPose
+    {
+        public bool HasPose;
+        public bool IsTracked;
+        public float LastSeenTime;
+        public Vector3 Position;
+        public Quaternion Rotation = Quaternion.identity;
+        public int ConsecutiveOutlierFrames;
     }
 
     public PassthroughCameraAccess cameraAccess;
@@ -64,18 +80,34 @@ public class CameraFeedViewer : MonoBehaviour
     [Min(0.001f)] public float axisLineWidth = 0.006f;
     [Min(0.005f)] public float minimumAxisLengthMeters = 0.03f;
     [Range(0f, 30f)] public float worldPoseSmoothing = 18f;
+    [Min(0f)] public float worldPoseSnapDistanceMeters = 0.08f;
+    [Range(0f, 180f)] public float worldPoseSnapRotationDegrees = 25f;
     [Range(1, 4)] public int processingDownscale = 2;
+    [Range(1, 4)] public int lostMarkerProcessingDownscale = 1;
     [Range(1, 4)] public int processEveryNthFrame = 1;
+    [Range(1f, 60f)] public float maxTrackingUpdatesPerSecond = 15f;
+    public int tableCenterMarkerId = 521;
+    [Range(0f, 30f)] public float tablePoseSmoothing = 24f;
+    [Min(0f)] public float tablePoseHoldSeconds = 0.2f;
+    [Min(0f)] public float tableMaxPositionJumpMeters = 0.05f;
+    [Range(0f, 180f)] public float tableMaxRotationJumpDegrees = 20f;
+    [Range(1, 5)] public int tableOutlierFramesBeforeSnap = 2;
     public bool drawDebugOverlay = true;
     public bool drawWorldMarkers = true;
     public bool updateCameraFeedTexture = false;
     public bool flipDisplayHorizontally = true;
     public bool flipDisplayVertically = true;
     public Transform worldOverlayParent;
+    public Transform tableOriginTransform;
+    public XRHandJointVisualizer recorderStatus;
+    public bool debugTextFollowsView = true;
+    [Min(0.1f)] public float debugTextDistance = 0.75f;
+    public Vector2 debugTextViewOffset = new Vector2(0f, -0.12f);
 
     Texture2D debugTexture;
     AndroidJavaClass arucoClass;
     bool isProcessing;
+    float lastTrackingRequestTime = float.NegativeInfinity;
     byte[] grayBytes;
     Color32[] debugPixels;
     readonly List<MarkerDetection> markerDetections = new List<MarkerDetection>();
@@ -84,6 +116,7 @@ public class CameraFeedViewer : MonoBehaviour
     readonly List<int> visibleMarkerIds = new List<int>();
     readonly Dictionary<int, MarkerVisual> worldMarkerVisuals = new Dictionary<int, MarkerVisual>();
     readonly List<int> visibleWorldMarkerIds = new List<int>();
+    readonly TrackedMarkerPose tableOriginPose = new TrackedMarkerPose();
 
     Transform overlayRoot;
     Transform worldOverlayRoot;
@@ -96,6 +129,20 @@ public class CameraFeedViewer : MonoBehaviour
     static readonly Color AxisXColor = new Color(1f, 0.25f, 0.25f, 1f);
     static readonly Color AxisYColor = new Color(0.25f, 1f, 0.25f, 1f);
     static readonly Color AxisZColor = new Color(0.25f, 0.55f, 1f, 1f);
+
+    public bool TryGetTableOriginPose(out Pose pose)
+    {
+        pose = default;
+        if (!tableOriginPose.HasPose)
+        {
+            return false;
+        }
+
+        pose = new Pose(tableOriginPose.Position, tableOriginPose.Rotation);
+        return true;
+    }
+
+    public bool IsTableCurrentlyTracked => tableOriginPose.IsTracked;
 
     void Start()
     {
@@ -178,6 +225,12 @@ public class CameraFeedViewer : MonoBehaviour
             return;
         }
 
+        float minTrackingInterval = 1f / Mathf.Max(1f, maxTrackingUpdatesPerSecond);
+        if ((Time.unscaledTime - lastTrackingRequestTime) < minTrackingInterval)
+        {
+            return;
+        }
+
         var tex = cameraAccess.GetTexture();
         if (tex == null)
         {
@@ -185,8 +238,9 @@ public class CameraFeedViewer : MonoBehaviour
         }
 
         isProcessing = true;
+        lastTrackingRequestTime = Time.unscaledTime;
 
-        int downscale = Mathf.Max(1, processingDownscale);
+        int downscale = GetEffectiveProcessingDownscale();
         int width = tex.width / downscale;
         int height = tex.height / downscale;
 
@@ -202,6 +256,11 @@ public class CameraFeedViewer : MonoBehaviour
             OnReadbackComplete(request, width, height, cameraPose, currentResolution, cameraIntrinsics);
             RenderTexture.ReleaseTemporary(rt);
         });
+    }
+
+    void LateUpdate()
+    {
+        UpdateDebugTextTransform();
     }
 
     void OnReadbackComplete(AsyncGPUReadbackRequest request, int width, int height, Pose cameraPose, Vector2Int currentResolution, PassthroughCameraAccess.CameraIntrinsics cameraIntrinsics)
@@ -273,8 +332,6 @@ public class CameraFeedViewer : MonoBehaviour
             }
         }
 
-        int markerCount = DetectMarkerCount(grayBytes, width, height);
-
         bool needsDetailedMarkerData = drawDebugOverlay && needsDebugTexture;
         if (needsDetailedMarkerData)
         {
@@ -286,12 +343,12 @@ public class CameraFeedViewer : MonoBehaviour
             markerDetections.Clear();
         }
 
-        if (needsDetailedMarkerData && markerCount > 0 && debugPixels != null)
+        if (needsDetailedMarkerData && markerDetections.Count > 0 && debugPixels != null)
         {
             DrawMarkerOverlayIntoTexture(width, height);
         }
 
-        if (drawWorldMarkers && markerCount > 0 && TryGetProcessingIntrinsics(width, height, currentResolution, cameraIntrinsics, out Vector2 focalLength, out Vector2 principalPoint))
+        if (drawWorldMarkers && TryGetProcessingIntrinsics(width, height, currentResolution, cameraIntrinsics, out Vector2 focalLength, out Vector2 principalPoint))
         {
             float[] markerPoseData = DetectMarkerPoses(grayBytes, width, height, focalLength.x, focalLength.y, principalPoint.x, principalPoint.y);
             ParseMarkerPoseData(markerPoseData, markerPoseDetections);
@@ -317,7 +374,9 @@ public class CameraFeedViewer : MonoBehaviour
             HideInactiveVisuals(markerVisuals);
         }
 
+        UpdateTrackedTableOrigin(cameraPose);
         UpdateWorldMarkerVisuals(cameraPose);
+        int markerCount = Mathf.Max(markerDetections.Count, markerPoseDetections.Count);
         UpdateDebugText(markerCount, width, height);
         isProcessing = false;
     }
@@ -329,10 +388,52 @@ public class CameraFeedViewer : MonoBehaviour
             return;
         }
 
-        string firstPose = markerPoseDetections.Count > 0
-            ? markerPoseDetections[0].TranslationVector.ToString("F3")
-            : "none";
-        debugText.text = $"Markers: {markerCount}\nCorner payloads: {markerDetections.Count}\nPose payloads: {markerPoseDetections.Count}\nFirst pose tvec: {firstPose}\nSize: {width}x{height}\nOverlay: {overlayMode}";
+        string tableFound = tableOriginPose.IsTracked ? "Yes" : "No";
+        string tablePosition = tableOriginPose.IsTracked
+            ? $"{tableOriginPose.Position.x:F3}, {tableOriginPose.Position.y:F3}, {tableOriginPose.Position.z:F3}"
+            : "--";
+        if (recorderStatus == null)
+        {
+            recorderStatus = FindFirstObjectByType<XRHandJointVisualizer>();
+        }
+
+        string lastSavePath = recorderStatus != null && !string.IsNullOrWhiteSpace(recorderStatus.LastSavedFilePath)
+            ? recorderStatus.LastSavedFilePath
+            : "--";
+
+        debugText.text =
+            $"Markers detected: {Mathf.Max(0, markerCount)}\n" +
+            $"Table found? {tableFound}\n" +
+            $"Table position: {tablePosition}\n" +
+            $"Last save: {lastSavePath}";
+    }
+
+    void UpdateDebugTextTransform()
+    {
+        if (!debugTextFollowsView || debugText == null)
+        {
+            return;
+        }
+
+        Transform followTransform = Camera.main != null ? Camera.main.transform : null;
+        if (followTransform == null)
+        {
+            return;
+        }
+
+        Vector3 targetPosition =
+            followTransform.position +
+            followTransform.forward * Mathf.Max(0.1f, debugTextDistance) +
+            followTransform.right * debugTextViewOffset.x +
+            followTransform.up * debugTextViewOffset.y;
+
+        debugText.transform.position = targetPosition;
+
+        Vector3 towardCamera = followTransform.position - targetPosition;
+        if (towardCamera.sqrMagnitude > 1e-6f)
+        {
+            debugText.transform.rotation = Quaternion.LookRotation(towardCamera.normalized, followTransform.up) * Quaternion.Euler(0f, 180f, 0f);
+        }
     }
 
     void ParseMarkerData(float[] markerData, List<MarkerDetection> results)
@@ -694,7 +795,17 @@ public class CameraFeedViewer : MonoBehaviour
         for (int i = 0; i < markerPoseDetections.Count; i++)
         {
             MarkerPoseDetection detection = markerPoseDetections[i];
-            if (!TryConvertMarkerPoseToWorldPose(detection, cameraPose, out Vector3 worldPosition, out Quaternion worldRotation))
+            Vector3 worldPosition;
+            Quaternion worldRotation;
+            Pose trackedTablePose = default;
+
+            bool useTrackedTableOrigin = detection.Id == tableCenterMarkerId && TryGetTableOriginPose(out trackedTablePose);
+            if (useTrackedTableOrigin)
+            {
+                worldPosition = trackedTablePose.position;
+                worldRotation = trackedTablePose.rotation;
+            }
+            else if (!TryConvertMarkerPoseToWorldPose(detection, cameraPose, out worldPosition, out worldRotation))
             {
                 continue;
             }
@@ -712,6 +823,108 @@ public class CameraFeedViewer : MonoBehaviour
                 pair.Value.SetActive(false);
             }
         }
+    }
+
+    int GetEffectiveProcessingDownscale()
+    {
+        int defaultDownscale = Mathf.Max(1, processingDownscale);
+        int recoveryDownscale = Mathf.Max(1, lostMarkerProcessingDownscale);
+
+        if (recoveryDownscale >= defaultDownscale)
+        {
+            return defaultDownscale;
+        }
+
+        return tableOriginPose.IsTracked ? defaultDownscale : recoveryDownscale;
+    }
+
+    void UpdateTrackedTableOrigin(Pose cameraPose)
+    {
+        bool foundTableMarker = false;
+
+        for (int i = 0; i < markerPoseDetections.Count; i++)
+        {
+            MarkerPoseDetection detection = markerPoseDetections[i];
+            if (detection.Id != tableCenterMarkerId)
+            {
+                continue;
+            }
+
+            if (!TryConvertMarkerPoseToWorldPose(detection, cameraPose, out Vector3 worldPosition, out Quaternion worldRotation))
+            {
+                continue;
+            }
+
+            foundTableMarker = true;
+            ApplyTrackedTablePose(worldPosition, worldRotation);
+            break;
+        }
+
+        if (!foundTableMarker)
+        {
+            float timeSinceSeen = Time.time - tableOriginPose.LastSeenTime;
+            tableOriginPose.IsTracked = tableOriginPose.HasPose && timeSinceSeen <= tablePoseHoldSeconds;
+        }
+
+        if (tableOriginTransform != null && tableOriginPose.HasPose)
+        {
+            tableOriginTransform.SetPositionAndRotation(tableOriginPose.Position, tableOriginPose.Rotation);
+        }
+    }
+
+    void ApplyTrackedTablePose(Vector3 worldPosition, Quaternion worldRotation)
+    {
+        if (!tableOriginPose.HasPose)
+        {
+            tableOriginPose.Position = worldPosition;
+            tableOriginPose.Rotation = worldRotation;
+            tableOriginPose.HasPose = true;
+            tableOriginPose.IsTracked = true;
+            tableOriginPose.LastSeenTime = Time.time;
+            tableOriginPose.ConsecutiveOutlierFrames = 0;
+            return;
+        }
+
+        float positionDelta = Vector3.Distance(tableOriginPose.Position, worldPosition);
+        float rotationDelta = Quaternion.Angle(tableOriginPose.Rotation, worldRotation);
+        bool isLargeJump = tableOriginPose.IsTracked &&
+            (tableMaxPositionJumpMeters > 0f && positionDelta > tableMaxPositionJumpMeters ||
+             tableMaxRotationJumpDegrees > 0f && rotationDelta > tableMaxRotationJumpDegrees);
+
+        if (isLargeJump)
+        {
+            tableOriginPose.ConsecutiveOutlierFrames++;
+
+            if (tableOriginPose.ConsecutiveOutlierFrames < Mathf.Max(1, tableOutlierFramesBeforeSnap))
+            {
+                tableOriginPose.LastSeenTime = Time.time;
+                return;
+            }
+
+            tableOriginPose.Position = worldPosition;
+            tableOriginPose.Rotation = worldRotation;
+            tableOriginPose.IsTracked = true;
+            tableOriginPose.LastSeenTime = Time.time;
+            tableOriginPose.ConsecutiveOutlierFrames = 0;
+            return;
+        }
+
+        tableOriginPose.ConsecutiveOutlierFrames = 0;
+
+        if (tablePoseSmoothing <= 0f)
+        {
+            tableOriginPose.Position = worldPosition;
+            tableOriginPose.Rotation = worldRotation;
+        }
+        else
+        {
+            float blend = 1f - Mathf.Exp(-tablePoseSmoothing * Time.deltaTime);
+            tableOriginPose.Position = Vector3.Lerp(tableOriginPose.Position, worldPosition, blend);
+            tableOriginPose.Rotation = Quaternion.Slerp(tableOriginPose.Rotation, worldRotation, blend);
+        }
+
+        tableOriginPose.IsTracked = true;
+        tableOriginPose.LastSeenTime = Time.time;
     }
 
     MarkerVisual GetOrCreateMarkerVisual(int markerId)
@@ -841,7 +1054,12 @@ public class CameraFeedViewer : MonoBehaviour
 
     void UpdateWorldMarkerVisual(MarkerVisual visual, Vector3 worldPosition, Quaternion worldRotation)
     {
-        if (!visual.HasSmoothedPose || worldPoseSmoothing <= 0f)
+        bool shouldSnapToPose = !visual.HasSmoothedPose ||
+            worldPoseSmoothing <= 0f ||
+            Vector3.Distance(visual.SmoothedPosition, worldPosition) > worldPoseSnapDistanceMeters ||
+            Quaternion.Angle(visual.SmoothedRotation, worldRotation) > worldPoseSnapRotationDegrees;
+
+        if (shouldSnapToPose)
         {
             visual.SmoothedPosition = worldPosition;
             visual.SmoothedRotation = worldRotation;
@@ -855,6 +1073,7 @@ public class CameraFeedViewer : MonoBehaviour
         }
 
         visual.Root.transform.SetPositionAndRotation(visual.SmoothedPosition, visual.SmoothedRotation);
+        visual.LastVisibleTime = Time.time;
 
         Vector3[] localCorners = BuildMarkerLocalCorners(markerSizeMeters * worldMarkerSizeMultiplier, overlaySurfaceOffset);
         UpdateOutlineRenderer(visual.Outline, localCorners);
