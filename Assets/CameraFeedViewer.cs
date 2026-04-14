@@ -86,14 +86,15 @@ public class CameraFeedViewer : MonoBehaviour
     [Range(1, 4)] public int lostMarkerProcessingDownscale = 1;
     [Range(1, 4)] public int processEveryNthFrame = 1;
     [Range(1f, 60f)] public float maxTrackingUpdatesPerSecond = 15f;
-    public int tableCenterMarkerId = 521;
+    public int tableCenterMarkerId = 0;
     [Range(0f, 30f)] public float tablePoseSmoothing = 24f;
     [Min(0f)] public float tablePoseHoldSeconds = 0.2f;
     [Min(0f)] public float tableMaxPositionJumpMeters = 0.05f;
     [Range(0f, 180f)] public float tableMaxRotationJumpDegrees = 20f;
     [Range(1, 5)] public int tableOutlierFramesBeforeSnap = 2;
     public bool drawDebugOverlay = true;
-    public bool drawWorldMarkers = true;
+    public bool estimateMarkerPoses = true;
+    public bool drawWorldMarkers = false;
     public bool updateCameraFeedTexture = false;
     public bool flipDisplayHorizontally = true;
     public bool flipDisplayVertically = true;
@@ -117,6 +118,8 @@ public class CameraFeedViewer : MonoBehaviour
     readonly Dictionary<int, MarkerVisual> worldMarkerVisuals = new Dictionary<int, MarkerVisual>();
     readonly List<int> visibleWorldMarkerIds = new List<int>();
     readonly TrackedMarkerPose tableOriginPose = new TrackedMarkerPose();
+    Pose lastProcessedCameraPose;
+    bool hasLastProcessedCameraPose;
 
     Transform overlayRoot;
     Transform worldOverlayRoot;
@@ -143,6 +146,37 @@ public class CameraFeedViewer : MonoBehaviour
     }
 
     public bool IsTableCurrentlyTracked => tableOriginPose.IsTracked;
+
+    public int GetLatestMarkerWorldPoses(int markerId, List<Pose> results)
+    {
+        if (results == null)
+        {
+            return 0;
+        }
+
+        results.Clear();
+
+        if (!hasLastProcessedCameraPose)
+        {
+            return 0;
+        }
+
+        for (int i = 0; i < markerPoseDetections.Count; i++)
+        {
+            MarkerPoseDetection detection = markerPoseDetections[i];
+            if (detection.Id != markerId)
+            {
+                continue;
+            }
+
+            if (TryConvertMarkerPoseToWorldPose(detection, lastProcessedCameraPose, out Vector3 worldPosition, out Quaternion worldRotation))
+            {
+                results.Add(new Pose(worldPosition, worldRotation));
+            }
+        }
+
+        return results.Count;
+    }
 
     void Start()
     {
@@ -272,6 +306,9 @@ public class CameraFeedViewer : MonoBehaviour
             return;
         }
 
+        lastProcessedCameraPose = cameraPose;
+        hasLastProcessedCameraPose = true;
+
         var rawData = request.GetData<byte>();
 
         bool needsDebugTexture = updateCameraFeedTexture && targetRenderer != null;
@@ -348,7 +385,7 @@ public class CameraFeedViewer : MonoBehaviour
             DrawMarkerOverlayIntoTexture(width, height);
         }
 
-        if (drawWorldMarkers && TryGetProcessingIntrinsics(width, height, currentResolution, cameraIntrinsics, out Vector2 focalLength, out Vector2 principalPoint))
+        if (estimateMarkerPoses && TryGetProcessingIntrinsics(width, height, currentResolution, cameraIntrinsics, out Vector2 focalLength, out Vector2 principalPoint))
         {
             float[] markerPoseData = DetectMarkerPoses(grayBytes, width, height, focalLength.x, focalLength.y, principalPoint.x, principalPoint.y);
             ParseMarkerPoseData(markerPoseData, markerPoseDetections);
@@ -375,7 +412,14 @@ public class CameraFeedViewer : MonoBehaviour
         }
 
         UpdateTrackedTableOrigin(cameraPose);
-        UpdateWorldMarkerVisuals(cameraPose);
+        if (drawWorldMarkers)
+        {
+            UpdateWorldMarkerVisuals(cameraPose);
+        }
+        else
+        {
+            HideInactiveVisuals(worldMarkerVisuals);
+        }
         int markerCount = Mathf.Max(markerDetections.Count, markerPoseDetections.Count);
         UpdateDebugText(markerCount, width, height);
         isProcessing = false;

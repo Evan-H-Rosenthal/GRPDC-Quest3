@@ -10,6 +10,7 @@ import java.util.List;
 
 public class ArucoBridge {
     private static final String TAG = "ArucoBridge";
+    private static final int[] TRACKED_MARKER_IDS = new int[] { 0, 1, 2, 3, 4 };
 
     static {
         System.loadLibrary("opencv_java4");
@@ -155,6 +156,10 @@ public class ArucoBridge {
 
             int solvedCount = 0;
             for (int markerIndex = 0; markerIndex < count; markerIndex++) {
+                if (!shouldTrackMarkerId(idValues[markerIndex])) {
+                    continue;
+                }
+
                 Mat cornerMat = corners.get(markerIndex);
                 float[] cornerData = new float[(int) (cornerMat.total() * cornerMat.channels())];
                 cornerMat.get(0, 0, cornerData);
@@ -236,18 +241,34 @@ public class ArucoBridge {
         }
     }
 
+    private static boolean shouldTrackMarkerId(int markerId) {
+        for (int allowedId : TRACKED_MARKER_IDS) {
+            if (allowedId == markerId) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static void initializeDetector() {
         if (detector != null) {
             return;
         }
 
-        Dictionary dict = Objdetect.getPredefinedDictionary(Objdetect.DICT_5X5_1000);
+        Dictionary dict = Objdetect.getPredefinedDictionary(Objdetect.DICT_4X4_50);
         DetectorParameters params = new DetectorParameters();
 
         // Optimized params for Quest 3 Passthrough
         params.set_minMarkerPerimeterRate(0.03);
         params.set_maxMarkerPerimeterRate(1.0);
-        params.set_adaptiveThreshWinSizeStep(10);
+        params.set_adaptiveThreshWinSizeMin(5);
+        params.set_adaptiveThreshWinSizeMax(15);
+        params.set_adaptiveThreshWinSizeStep(5);
+        params.set_cornerRefinementMethod(Objdetect.CORNER_REFINE_SUBPIX);
+        params.set_cornerRefinementWinSize(5);
+        params.set_cornerRefinementMaxIterations(20);
+        params.set_cornerRefinementMinAccuracy(0.05);
 
         detector = new ArucoDetector(dict, params);
     }
