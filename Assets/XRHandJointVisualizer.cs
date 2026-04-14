@@ -17,6 +17,8 @@ public class XRHandJointVisualizer : MonoBehaviour
     [Min(0.02f)] public float recordingToggleZoneRadius = 0.07f;
     [Min(0.05f)] public float recordingToggleCooldownSeconds = 0.75f;
     [Min(0.005f)] public float leftPinchDistanceThreshold = 0.025f;
+    public bool freezeTableOriginOnRecordingStart = true;
+    public bool requireTrackedTableToStartRecording = false;
     public bool showRecordingToggleVisual = true;
     [Min(0.01f)] public float recordingToggleVisualScale = 0.035f;
 
@@ -38,6 +40,8 @@ public class XRHandJointVisualizer : MonoBehaviour
     public float recordStartTime = 0f;
     public string LastSavedFilePath { get; private set; } = "";
     private List<string> recordedLines = new List<string>();
+    private Pose recordingStartTableOriginPose;
+    private bool hasRecordingStartTableOriginPose;
     private HashSet<string> targetJoints = new HashSet<string>()
     {
         // All joints shown here show significant rotation and are key to hand movement
@@ -145,11 +149,27 @@ public class XRHandJointVisualizer : MonoBehaviour
 
     private void StartRecording()
     {
+        if (requireTrackedTableToStartRecording && !TryCaptureRecordingStartTableOrigin())
+        {
+            Debug.LogWarning("Recording start blocked because no tracked table origin is available.");
+            return;
+        }
+
         isRecording = true;
         recordStartTime = Time.time;
         recordedLines.Clear();
+        if (!freezeTableOriginOnRecordingStart)
+        {
+            hasRecordingStartTableOriginPose = false;
+        }
+        else if (!hasRecordingStartTableOriginPose)
+        {
+            TryCaptureRecordingStartTableOrigin();
+        }
         UpdateRecordingVisualState();
-        Debug.Log("Recording Started");
+        Debug.Log(hasRecordingStartTableOriginPose
+            ? "Recording Started with frozen table origin."
+            : "Recording Started without frozen table origin.");
     }
 
     private void StopRecording()
@@ -163,6 +183,7 @@ public class XRHandJointVisualizer : MonoBehaviour
         string file = Path.Combine(outputDirectory, "hand_recording_" + System.DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".json");
         File.WriteAllLines(file, recordedLines);
         LastSavedFilePath = file;
+        hasRecordingStartTableOriginPose = false;
 
         Debug.Log("Recording Stopped and Saved To: " + file);
     }
@@ -198,19 +219,57 @@ public class XRHandJointVisualizer : MonoBehaviour
 
         AppendPoseObject(sb, "handRootWorld", root.position, root.rotation);
 
-        Pose tableOriginPose = default;
-        bool hasTableOrigin = tableTracker != null && tableTracker.TryGetTableOriginPose(out tableOriginPose);
-        sb.AppendFormat("\"tableOriginTracked\":{0},", hasTableOrigin ? "true" : "false");
+        Pose liveTableOriginPose = default;
+        bool hasLiveTableOrigin = tableTracker != null && tableTracker.TryGetTableOriginPose(out liveTableOriginPose);
+        sb.AppendFormat("\"tableOriginTracked\":{0},", hasLiveTableOrigin ? "true" : "false");
         Vector3 recordedRootPosition = root.position;
         Quaternion recordedRootRotation = root.rotation;
         string recordedRootSpace = "world";
 
-        if (hasTableOrigin)
+        if (hasLiveTableOrigin)
         {
-            AppendPoseObject(sb, "tableOriginWorld", tableOriginPose.position, tableOriginPose.rotation);
+            AppendPoseObject(sb, "tableOriginWorld", liveTableOriginPose.position, liveTableOriginPose.rotation);
+        }
 
-            Vector3 tableRelativePosition = Quaternion.Inverse(tableOriginPose.rotation) * (root.position - tableOriginPose.position);
-            Quaternion tableRelativeRotation = Quaternion.Inverse(tableOriginPose.rotation) * root.rotation;
+        Pose recordingTableOriginPose = liveTableOriginPose;
+        bool hasRecordingTableOrigin = hasLiveTableOrigin;
+
+        if (freezeTableOriginOnRecordingStart)
+        {
+            if (!hasRecordingStartTableOriginPose && hasLiveTableOrigin)
+            {
+                recordingStartTableOriginPose = liveTableOriginPose;
+                hasRecordingStartTableOriginPose = true;
+            }
+
+            if (hasRecordingStartTableOriginPose)
+            {
+                recordingTableOriginPose = recordingStartTableOriginPose;
+                hasRecordingTableOrigin = true;
+                sb.AppendFormat("\"tableOriginFrozen\":true,");
+                AppendPoseObject(
+                    sb,
+                    "tableOriginRecordingStartWorld",
+                    recordingStartTableOriginPose.position,
+                    recordingStartTableOriginPose.rotation);
+            }
+            else
+            {
+                sb.AppendFormat("\"tableOriginFrozen\":false,");
+            }
+        }
+        else
+        {
+            sb.AppendFormat("\"tableOriginFrozen\":false,");
+        }
+
+        if (hasRecordingTableOrigin)
+        {
+            Vector3 tableRelativePosition =
+                Quaternion.Inverse(recordingTableOriginPose.rotation) *
+                (root.position - recordingTableOriginPose.position);
+            Quaternion tableRelativeRotation =
+                Quaternion.Inverse(recordingTableOriginPose.rotation) * root.rotation;
             AppendPoseObject(sb, "handRootTable", tableRelativePosition, tableRelativeRotation);
             recordedRootPosition = tableRelativePosition;
             recordedRootRotation = tableRelativeRotation;
@@ -246,6 +305,18 @@ public class XRHandJointVisualizer : MonoBehaviour
             name,
             position.x, position.y, position.z,
             rotation.x, rotation.y, rotation.z, rotation.w);
+    }
+
+    private bool TryCaptureRecordingStartTableOrigin()
+    {
+        if (tableTracker == null || !tableTracker.TryGetTableOriginPose(out Pose tableOriginPose))
+        {
+            return false;
+        }
+
+        recordingStartTableOriginPose = tableOriginPose;
+        hasRecordingStartTableOriginPose = true;
+        return true;
     }
 
     private string GetRecordingDirectory()
