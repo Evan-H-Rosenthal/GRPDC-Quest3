@@ -65,6 +65,15 @@ public class ArucoCubeTracker : MonoBehaviour
     [Range(0f, 180f)] public float maxRotationStepPerUpdateDegrees = 18f;
     [Min(0f)] public float relocalizationSnapDistanceMeters = 0.2f;
     [Range(0f, 180f)] public float relocalizationSnapRotationDegrees = 75f;
+    public bool onlyUpdateWhenHandNear = true;
+    [Min(0.01f)] public float handNearDistanceMeters = 0.18f;
+    [Min(0.01f)] public float handFarDistanceMeters = 0.26f;
+    public Transform primaryHandTransform;
+    public Transform secondaryHandTransform;
+    public bool requireConfirmationForSingleMarkerFaceSwitch = true;
+    [Range(1, 8)] public int singleMarkerFaceSwitchConfirmationFrames = 3;
+    [Min(0f)] public float stationaryPositionDeadbandMeters = 0.0025f;
+    [Range(0f, 45f)] public float stationaryRotationDeadbandDegrees = 2f;
     public bool createRuntimeVisual = true;
     public Transform cubeVisualTransform;
     public Material cubeMaterial;
@@ -78,6 +87,10 @@ public class ArucoCubeTracker : MonoBehaviour
     Transform runtimeVisualRoot;
     TextMeshPro runtimeLabel;
     int lastResolvedFaceIndex = -1;
+    int pendingSingleMarkerFaceIndex = -1;
+    int pendingSingleMarkerFaceFrames;
+    bool handWasNearLastUpdate;
+    XRHandJointVisualizer handVisualizer;
 
     public bool TryGetCubeWorldPose(out Pose pose)
     {
@@ -90,6 +103,9 @@ public class ArucoCubeTracker : MonoBehaviour
         pose = new Pose(trackedPose.Position, trackedPose.Rotation);
         return true;
     }
+
+    public bool IsCubeCurrentlyTracked => trackedPose.IsTracked;
+    public bool HasCubePose => trackedPose.HasPose;
 
     public bool TryGetCubePoseRelativeToTable(out Pose pose)
     {
@@ -133,8 +149,87 @@ public class ArucoCubeTracker : MonoBehaviour
             return;
         }
 
+        if (!ShouldAcceptMeasurement(worldPosition))
+        {
+            trackedPose.IsTracked = false;
+            trackedPose.IsVisible = trackedPose.HasPose;
+            UpdateVisual();
+            return;
+        }
+
         ApplyTrackedPose(worldPosition, worldRotation);
         UpdateVisual();
+    }
+
+    bool ShouldAcceptMeasurement(Vector3 candidateWorldPosition)
+    {
+        if (!onlyUpdateWhenHandNear)
+        {
+            return true;
+        }
+
+        if (!trackedPose.HasPose)
+        {
+            return true;
+        }
+
+        EnsureHandReferences();
+
+        if (primaryHandTransform == null && secondaryHandTransform == null)
+        {
+            return true;
+        }
+
+        float distanceThreshold = handWasNearLastUpdate
+            ? Mathf.Max(handNearDistanceMeters, handFarDistanceMeters)
+            : handNearDistanceMeters;
+        Vector3 referencePosition = trackedPose.Position;
+
+        bool isNear = IsHandNear(referencePosition, primaryHandTransform, distanceThreshold) ||
+            IsHandNear(referencePosition, secondaryHandTransform, distanceThreshold) ||
+            IsHandNear(candidateWorldPosition, primaryHandTransform, distanceThreshold) ||
+            IsHandNear(candidateWorldPosition, secondaryHandTransform, distanceThreshold);
+
+        handWasNearLastUpdate = isNear;
+        return isNear;
+    }
+
+    bool IsHandNear(Vector3 cubePosition, Transform handTransform, float distanceThreshold)
+    {
+        if (handTransform == null)
+        {
+            return false;
+        }
+
+        return Vector3.Distance(cubePosition, handTransform.position) <= distanceThreshold;
+    }
+
+    void EnsureHandReferences()
+    {
+        if (primaryHandTransform != null || secondaryHandTransform != null)
+        {
+            return;
+        }
+
+        if (handVisualizer == null)
+        {
+            handVisualizer = FindFirstObjectByType<XRHandJointVisualizer>();
+        }
+
+        if (handVisualizer == null)
+        {
+            return;
+        }
+
+        if (primaryHandTransform == null && handVisualizer.Hand != null)
+        {
+            primaryHandTransform = handVisualizer.Hand.transform;
+        }
+
+        if (secondaryHandTransform == null && handVisualizer.leftHand != null)
+        {
+            secondaryHandTransform = handVisualizer.leftHand.transform;
+        }
     }
 
     bool TryResolveCubePose(List<Pose> markerPoses, out Vector3 worldPosition, out Quaternion worldRotation)
@@ -253,7 +348,54 @@ public class ArucoCubeTracker : MonoBehaviour
 
         worldPosition = accumulatedPosition / accumulatedCount;
         worldRotation = accumulatedRotation;
+
+        if (!ShouldAcceptResolvedFace(markerPoses.Count, bestCandidate.FaceIndex))
+        {
+            return false;
+        }
+
         lastResolvedFaceIndex = bestCandidate.FaceIndex;
+        return true;
+    }
+
+    bool ShouldAcceptResolvedFace(int visibleMarkerCount, int resolvedFaceIndex)
+    {
+        if (!trackedPose.HasPose)
+        {
+            pendingSingleMarkerFaceIndex = -1;
+            pendingSingleMarkerFaceFrames = 0;
+            return true;
+        }
+
+        if (!requireConfirmationForSingleMarkerFaceSwitch || visibleMarkerCount != 1 || lastResolvedFaceIndex < 0)
+        {
+            pendingSingleMarkerFaceIndex = -1;
+            pendingSingleMarkerFaceFrames = 0;
+            return true;
+        }
+
+        if (resolvedFaceIndex == lastResolvedFaceIndex)
+        {
+            pendingSingleMarkerFaceIndex = -1;
+            pendingSingleMarkerFaceFrames = 0;
+            return true;
+        }
+
+        if (pendingSingleMarkerFaceIndex != resolvedFaceIndex)
+        {
+            pendingSingleMarkerFaceIndex = resolvedFaceIndex;
+            pendingSingleMarkerFaceFrames = 1;
+            return false;
+        }
+
+        pendingSingleMarkerFaceFrames++;
+        if (pendingSingleMarkerFaceFrames < Mathf.Max(1, singleMarkerFaceSwitchConfirmationFrames))
+        {
+            return false;
+        }
+
+        pendingSingleMarkerFaceIndex = -1;
+        pendingSingleMarkerFaceFrames = 0;
         return true;
     }
 
@@ -331,6 +473,17 @@ public class ArucoCubeTracker : MonoBehaviour
         }
 
         trackedPose.ConsecutiveOutlierFrames = 0;
+
+        bool measurementIsWithinDeadband =
+            positionDelta <= stationaryPositionDeadbandMeters &&
+            rotationDelta <= stationaryRotationDeadbandDegrees;
+        if (measurementIsWithinDeadband)
+        {
+            trackedPose.LastSeenTime = Time.time;
+            trackedPose.IsTracked = true;
+            trackedPose.IsVisible = true;
+            return;
+        }
 
         if (poseSmoothing <= 0f)
         {

@@ -11,6 +11,10 @@ import java.util.List;
 public class ArucoBridge {
     private static final String TAG = "ArucoBridge";
     private static final int[] TRACKED_MARKER_IDS = new int[] { 0, 1, 2, 3, 4 };
+    private static final Mat CAMERA_MATRIX = Mat.eye(3, 3, CvType.CV_64F);
+    private static final MatOfDouble DIST_COEFFS = new MatOfDouble(0.0, 0.0, 0.0, 0.0, 0.0);
+    private static MatOfPoint3f objectPoints = null;
+    private static float cachedMarkerLengthMeters = -1f;
 
     static {
         System.loadLibrary("opencv_java4");
@@ -115,12 +119,11 @@ public class ArucoBridge {
     public static float[] estimateMarkerPoses(byte[] imageData, int width, int height, float fx, float fy, float cx, float cy, float markerLengthMeters) {
         Mat gray = null;
         Mat ids = null;
-        Mat cameraMatrix = null;
-        MatOfDouble distCoeffs = null;
         List<Mat> corners = new ArrayList<>();
 
         try {
             initializeDetector();
+            ensurePoseEstimationInputs(fx, fy, cx, cy, markerLengthMeters);
 
             gray = new Mat(height, width, CvType.CV_8UC1);
             gray.put(0, 0, imageData);
@@ -137,22 +140,6 @@ public class ArucoBridge {
 
             int[] idValues = new int[count];
             ids.get(0, 0, idValues);
-
-            cameraMatrix = Mat.eye(3, 3, CvType.CV_64F);
-            cameraMatrix.put(0, 0, fx);
-            cameraMatrix.put(1, 1, fy);
-            cameraMatrix.put(0, 2, cx);
-            cameraMatrix.put(1, 2, cy);
-
-            distCoeffs = new MatOfDouble(0.0, 0.0, 0.0, 0.0, 0.0);
-
-            double halfSize = markerLengthMeters * 0.5;
-            MatOfPoint3f objectPoints = new MatOfPoint3f(
-                new Point3(-halfSize, halfSize, 0.0),
-                new Point3(halfSize, halfSize, 0.0),
-                new Point3(halfSize, -halfSize, 0.0),
-                new Point3(-halfSize, -halfSize, 0.0)
-            );
 
             int solvedCount = 0;
             for (int markerIndex = 0; markerIndex < count; markerIndex++) {
@@ -178,15 +165,15 @@ public class ArucoBridge {
                     boolean solved = Calib3d.solvePnP(
                         objectPoints,
                         imagePoints,
-                        cameraMatrix,
-                        distCoeffs,
+                        CAMERA_MATRIX,
+                        DIST_COEFFS,
                         rvec,
                         tvec,
                         false,
                         Calib3d.SOLVEPNP_IPPE_SQUARE);
 
                     if (!solved) {
-                        solved = Calib3d.solvePnP(objectPoints, imagePoints, cameraMatrix, distCoeffs, rvec, tvec);
+                        solved = Calib3d.solvePnP(objectPoints, imagePoints, CAMERA_MATRIX, DIST_COEFFS, rvec, tvec);
                     }
 
                     if (solved) {
@@ -212,7 +199,6 @@ public class ArucoBridge {
                 }
             }
 
-            objectPoints.release();
             flattened[0] = solvedCount;
             return Arrays.copyOf(flattened, 1 + (solvedCount * 7));
         } catch (Exception e) {
@@ -230,15 +216,36 @@ public class ArucoBridge {
             if (ids != null) {
                 ids.release();
             }
-
-            if (cameraMatrix != null) {
-                cameraMatrix.release();
-            }
-
-            if (distCoeffs != null) {
-                distCoeffs.release();
-            }
         }
+    }
+
+    private static void ensurePoseEstimationInputs(float fx, float fy, float cx, float cy, float markerLengthMeters) {
+        CAMERA_MATRIX.put(0, 0, fx);
+        CAMERA_MATRIX.put(0, 1, 0.0);
+        CAMERA_MATRIX.put(0, 2, cx);
+        CAMERA_MATRIX.put(1, 0, 0.0);
+        CAMERA_MATRIX.put(1, 1, fy);
+        CAMERA_MATRIX.put(1, 2, cy);
+        CAMERA_MATRIX.put(2, 0, 0.0);
+        CAMERA_MATRIX.put(2, 1, 0.0);
+        CAMERA_MATRIX.put(2, 2, 1.0);
+
+        if (objectPoints != null && Math.abs(cachedMarkerLengthMeters - markerLengthMeters) < 1e-6f) {
+            return;
+        }
+
+        if (objectPoints != null) {
+            objectPoints.release();
+        }
+
+        double halfSize = markerLengthMeters * 0.5;
+        objectPoints = new MatOfPoint3f(
+            new Point3(-halfSize, halfSize, 0.0),
+            new Point3(halfSize, halfSize, 0.0),
+            new Point3(halfSize, -halfSize, 0.0),
+            new Point3(-halfSize, -halfSize, 0.0)
+        );
+        cachedMarkerLengthMeters = markerLengthMeters;
     }
 
     private static boolean shouldTrackMarkerId(int markerId) {

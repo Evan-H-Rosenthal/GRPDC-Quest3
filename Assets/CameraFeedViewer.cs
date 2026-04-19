@@ -92,6 +92,10 @@ public class CameraFeedViewer : MonoBehaviour
     [Min(0f)] public float tableMaxPositionJumpMeters = 0.05f;
     [Range(0f, 180f)] public float tableMaxRotationJumpDegrees = 20f;
     [Range(1, 5)] public int tableOutlierFramesBeforeSnap = 2;
+    [Min(0f)] public float tablePositionDeadbandMeters = 0.0015f;
+    [Range(0f, 45f)] public float tableRotationDeadbandDegrees = 1.5f;
+    [Min(0f)] public float tableMaxPositionStepPerUpdateMeters = 0.015f;
+    [Range(0f, 180f)] public float tableMaxRotationStepPerUpdateDegrees = 10f;
     public bool drawDebugOverlay = true;
     public bool estimateMarkerPoses = true;
     public bool drawWorldMarkers = false;
@@ -884,24 +888,10 @@ public class CameraFeedViewer : MonoBehaviour
 
     void UpdateTrackedTableOrigin(Pose cameraPose)
     {
-        bool foundTableMarker = false;
-
-        for (int i = 0; i < markerPoseDetections.Count; i++)
+        bool foundTableMarker = TryGetBestTableMarkerPose(cameraPose, out Vector3 worldPosition, out Quaternion worldRotation);
+        if (foundTableMarker)
         {
-            MarkerPoseDetection detection = markerPoseDetections[i];
-            if (detection.Id != tableCenterMarkerId)
-            {
-                continue;
-            }
-
-            if (!TryConvertMarkerPoseToWorldPose(detection, cameraPose, out Vector3 worldPosition, out Quaternion worldRotation))
-            {
-                continue;
-            }
-
-            foundTableMarker = true;
             ApplyTrackedTablePose(worldPosition, worldRotation);
-            break;
         }
 
         if (!foundTableMarker)
@@ -914,6 +904,46 @@ public class CameraFeedViewer : MonoBehaviour
         {
             tableOriginTransform.SetPositionAndRotation(tableOriginPose.Position, tableOriginPose.Rotation);
         }
+    }
+
+    bool TryGetBestTableMarkerPose(Pose cameraPose, out Vector3 worldPosition, out Quaternion worldRotation)
+    {
+        worldPosition = default;
+        worldRotation = Quaternion.identity;
+
+        bool foundCandidate = false;
+        float bestScore = float.PositiveInfinity;
+
+        for (int i = 0; i < markerPoseDetections.Count; i++)
+        {
+            MarkerPoseDetection detection = markerPoseDetections[i];
+            if (detection.Id != tableCenterMarkerId)
+            {
+                continue;
+            }
+
+            if (!TryConvertMarkerPoseToWorldPose(detection, cameraPose, out Vector3 candidatePosition, out Quaternion candidateRotation))
+            {
+                continue;
+            }
+
+            float score = 0f;
+            if (tableOriginPose.HasPose)
+            {
+                score += Vector3.Distance(tableOriginPose.Position, candidatePosition);
+                score += Quaternion.Angle(tableOriginPose.Rotation, candidateRotation) * 0.0025f;
+            }
+
+            if (!foundCandidate || score < bestScore)
+            {
+                foundCandidate = true;
+                bestScore = score;
+                worldPosition = candidatePosition;
+                worldRotation = candidateRotation;
+            }
+        }
+
+        return foundCandidate;
     }
 
     void ApplyTrackedTablePose(Vector3 worldPosition, Quaternion worldRotation)
@@ -955,6 +985,16 @@ public class CameraFeedViewer : MonoBehaviour
 
         tableOriginPose.ConsecutiveOutlierFrames = 0;
 
+        bool measurementIsWithinDeadband =
+            positionDelta <= tablePositionDeadbandMeters &&
+            rotationDelta <= tableRotationDeadbandDegrees;
+        if (measurementIsWithinDeadband)
+        {
+            tableOriginPose.IsTracked = true;
+            tableOriginPose.LastSeenTime = Time.time;
+            return;
+        }
+
         if (tablePoseSmoothing <= 0f)
         {
             tableOriginPose.Position = worldPosition;
@@ -963,8 +1003,27 @@ public class CameraFeedViewer : MonoBehaviour
         else
         {
             float blend = 1f - Mathf.Exp(-tablePoseSmoothing * Time.deltaTime);
-            tableOriginPose.Position = Vector3.Lerp(tableOriginPose.Position, worldPosition, blend);
-            tableOriginPose.Rotation = Quaternion.Slerp(tableOriginPose.Rotation, worldRotation, blend);
+            Vector3 blendedPosition = Vector3.Lerp(tableOriginPose.Position, worldPosition, blend);
+            Quaternion blendedRotation = Quaternion.Slerp(tableOriginPose.Rotation, worldRotation, blend);
+
+            if (tableMaxPositionStepPerUpdateMeters > 0f)
+            {
+                blendedPosition = Vector3.MoveTowards(
+                    tableOriginPose.Position,
+                    blendedPosition,
+                    tableMaxPositionStepPerUpdateMeters);
+            }
+
+            if (tableMaxRotationStepPerUpdateDegrees > 0f)
+            {
+                blendedRotation = Quaternion.RotateTowards(
+                    tableOriginPose.Rotation,
+                    blendedRotation,
+                    tableMaxRotationStepPerUpdateDegrees);
+            }
+
+            tableOriginPose.Position = blendedPosition;
+            tableOriginPose.Rotation = blendedRotation;
         }
 
         tableOriginPose.IsTracked = true;

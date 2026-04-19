@@ -8,6 +8,9 @@ public class XRHandJointVisualizer : MonoBehaviour
     public GameObject Hand; // assign OpenXRHand here in the Inspector
     public GameObject leftHand;
     public CameraFeedViewer tableTracker;
+    public ArucoCubeTracker[] cubeTrackers;
+    public bool showJointDebugVisuals = false;
+    public bool showJointLabels = false;
     public string recordingDirectoryOverride = "";
     public bool useControllerButtonToggle = false;
     public bool usePinchToggle = false;
@@ -90,31 +93,36 @@ public class XRHandJointVisualizer : MonoBehaviour
 
         foreach (var joint in jointObjects)
         {
-            // Create cube
-            GameObject cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            cube.transform.localScale = Vector3.one * 0.01f;
-            cube.GetComponent<Collider>().enabled = false;
-            cube.layer = debugLayer;
+            if (showJointDebugVisuals)
+            {
+                GameObject cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                cube.transform.localScale = Vector3.one * 0.01f;
+                cube.GetComponent<Collider>().enabled = false;
+                cube.layer = debugLayer;
 
-            cube.GetComponent<Renderer>().material.shader = Shader.Find("Unlit/Color");
-            cube.GetComponent<Renderer>().material.color = Color.red;
-            jointSpheres.Add(cube);
+                cube.GetComponent<Renderer>().material.shader = Shader.Find("Unlit/Color");
+                cube.GetComponent<Renderer>().material.color = Color.red;
+                jointSpheres.Add(cube);
+            }
 
-            // Create text label
-            GameObject textObj = new GameObject("JointLabel_" + joint.name);
-            TextMesh tm = textObj.AddComponent<TextMesh>();
-            tm.text = joint.name;
-            tm.fontSize = 16;              // smaller text
-            tm.characterSize = 0.0025f;    // smaller scaling
-            tm.anchor = TextAnchor.LowerCenter;
-            tm.color = Color.yellow;
+            if (showJointLabels)
+            {
+                GameObject textObj = new GameObject("JointLabel_" + joint.name);
+                TextMesh tm = textObj.AddComponent<TextMesh>();
+                tm.text = joint.name;
+                tm.fontSize = 16;
+                tm.characterSize = 0.0025f;
+                tm.anchor = TextAnchor.LowerCenter;
+                tm.color = Color.yellow;
 
-            textObj.layer = debugLayer;
-            jointLabels.Add(tm);
+                textObj.layer = debugLayer;
+                jointLabels.Add(tm);
+            }
         }
 
-        Debug.Log($"Created {jointSpheres.Count} joint debug spheres + labels");
+        Debug.Log($"Created {jointSpheres.Count} joint debug cubes and {jointLabels.Count} joint labels");
         EnsureRecordingToggleVisual();
+        CacheCubeTrackers();
     }
 
     void Update()
@@ -128,20 +136,23 @@ public class XRHandJointVisualizer : MonoBehaviour
         {
             Transform t = jointObjects[i].transform;
 
-            // Update cube
-            jointSpheres[i].transform.position = t.position;
-            jointSpheres[i].transform.rotation = t.rotation;
+            if (showJointDebugVisuals && i < jointSpheres.Count)
+            {
+                jointSpheres[i].transform.position = t.position;
+                jointSpheres[i].transform.rotation = t.rotation;
+            }
 
-            // Display local Euler rotation in text (rounded)
-            Vector3 rot = t.localEulerAngles;
-            jointLabels[i].text = $"{t.name}\nRot: {rot.x:F1}, {rot.y:F1}, {rot.z:F1}";
+            if (showJointLabels && i < jointLabels.Count)
+            {
+                Vector3 rot = t.localEulerAngles;
+                jointLabels[i].text = $"{t.name}\nRot: {rot.x:F1}, {rot.y:F1}, {rot.z:F1}";
+                jointLabels[i].transform.position = t.position + Vector3.up * 0.015f;
 
-            // Update label slightly above the cube
-            jointLabels[i].transform.position = t.position + Vector3.up * 0.015f;
-
-            // Always face camera
-            if (Camera.main != null)
-                jointLabels[i].transform.rotation = Camera.main.transform.rotation;
+                if (Camera.main != null)
+                {
+                    jointLabels[i].transform.rotation = Camera.main.transform.rotation;
+                }
+            }
         }
 
         if (isRecording) RecordFrame();
@@ -278,6 +289,7 @@ public class XRHandJointVisualizer : MonoBehaviour
 
         sb.AppendFormat("\"rootSpace\":\"{0}\",", recordedRootSpace);
         AppendPoseObject(sb, root.name, recordedRootPosition, recordedRootRotation);
+        AppendCubeRecordingData(sb, hasRecordingTableOrigin, recordingTableOriginPose);
 
         // Joint rotations
         foreach (var j in jointObjects)
@@ -305,6 +317,49 @@ public class XRHandJointVisualizer : MonoBehaviour
             name,
             position.x, position.y, position.z,
             rotation.x, rotation.y, rotation.z, rotation.w);
+    }
+
+    private void AppendCubeRecordingData(StringBuilder sb, bool hasRecordingTableOrigin, Pose recordingTableOriginPose)
+    {
+        CacheCubeTrackers();
+
+        if (cubeTrackers == null || cubeTrackers.Length == 0)
+        {
+            return;
+        }
+
+        foreach (ArucoCubeTracker cubeTracker in cubeTrackers)
+        {
+            if (cubeTracker == null)
+            {
+                continue;
+            }
+
+            string cubeKey = $"cube{cubeTracker.cubeMarkerId}";
+            sb.AppendFormat("\"{0}Tracked\":{1},", cubeKey, cubeTracker.IsCubeCurrentlyTracked ? "true" : "false");
+
+            if (!hasRecordingTableOrigin || !cubeTracker.TryGetCubeWorldPose(out Pose cubeWorldPose))
+            {
+                continue;
+            }
+
+            Vector3 tableRelativePosition =
+                Quaternion.Inverse(recordingTableOriginPose.rotation) *
+                (cubeWorldPose.position - recordingTableOriginPose.position);
+            Quaternion tableRelativeRotation =
+                Quaternion.Inverse(recordingTableOriginPose.rotation) * cubeWorldPose.rotation;
+            AppendPoseObject(sb, $"{cubeKey}Table", tableRelativePosition, tableRelativeRotation);
+        }
+    }
+
+    private void CacheCubeTrackers()
+    {
+        if (cubeTrackers != null && cubeTrackers.Length > 0)
+        {
+            return;
+        }
+
+        cubeTrackers = FindObjectsByType<ArucoCubeTracker>(FindObjectsSortMode.None);
     }
 
     private bool TryCaptureRecordingStartTableOrigin()

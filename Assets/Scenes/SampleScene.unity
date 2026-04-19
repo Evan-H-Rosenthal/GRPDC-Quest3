@@ -423,11 +423,15 @@ MonoBehaviour:
   processEveryNthFrame: 1
   maxTrackingUpdatesPerSecond: 24
   tableCenterMarkerId: 0
-  tablePoseSmoothing: 16
+  tablePoseSmoothing: 18
   tablePoseHoldSeconds: 0.5
   tableMaxPositionJumpMeters: 0.04
   tableMaxRotationJumpDegrees: 15
   tableOutlierFramesBeforeSnap: 3
+  tablePositionDeadbandMeters: 0.0015
+  tableRotationDeadbandDegrees: 1.5
+  tableMaxPositionStepPerUpdateMeters: 0.015
+  tableMaxRotationStepPerUpdateDegrees: 10
   drawDebugOverlay: 0
   estimateMarkerPoses: 1
   drawWorldMarkers: 0
@@ -436,6 +440,7 @@ MonoBehaviour:
   flipDisplayVertically: 1
   worldOverlayParent: {fileID: 0}
   tableOriginTransform: {fileID: 256051032}
+  recorderStatus: {fileID: 0}
   debugTextFollowsView: 1
   debugTextDistance: 0.75
   debugTextViewOffset: {x: 0, y: 0.2}
@@ -583,262 +588,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 256051032}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!1 &1999100000
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 1999100001}
-  - component: {fileID: 1999100002}
-  m_Layer: 0
-  m_Name: CubeTracker_1
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!4 &1999100001
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1999100000}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &1999100002
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1999100000}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f86b69d0d4d24dd19f8cc9db3e5aa75e, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: '::'
-  markerTracker: {fileID: 256051030}
-  cubeLabel: Cube 1
-  cubeMarkerId: 1
-  cubeSizeMeters: 0.0762
-  poseHoldSeconds: 0.75
-  poseSmoothing: 12
-  maxPositionJumpMeters: 0.08
-  maxRotationJumpDegrees: 55
-  outlierFramesBeforeSnap: 2
-  consensusPositionToleranceMeters: 0.025
-  consensusRotationToleranceDegrees: 20
-  maxPositionStepPerUpdateMeters: 0.03
-  maxRotationStepPerUpdateDegrees: 18
-  relocalizationSnapDistanceMeters: 0.2
-  relocalizationSnapRotationDegrees: 75
-  createRuntimeVisual: 1
-  cubeVisualTransform: {fileID: 0}
-  cubeMaterial: {fileID: 2100000, guid: aefee4b39d9d5f943acec085dbeb009f, type: 2}
-  cubeColor: {r: 1, g: 0.15, b: 0.15, a: 1}
-  showLabel: 0
---- !u!1 &1999100010
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 1999100011}
-  - component: {fileID: 1999100012}
-  m_Layer: 0
-  m_Name: CubeTracker_2
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!4 &1999100011
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1999100010}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &1999100012
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1999100010}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f86b69d0d4d24dd19f8cc9db3e5aa75e, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: '::'
-  markerTracker: {fileID: 256051030}
-  cubeLabel: Cube 2
-  cubeMarkerId: 2
-  cubeSizeMeters: 0.0762
-  poseHoldSeconds: 0.75
-  poseSmoothing: 12
-  maxPositionJumpMeters: 0.08
-  maxRotationJumpDegrees: 55
-  outlierFramesBeforeSnap: 2
-  consensusPositionToleranceMeters: 0.025
-  consensusRotationToleranceDegrees: 20
-  maxPositionStepPerUpdateMeters: 0.03
-  maxRotationStepPerUpdateDegrees: 18
-  relocalizationSnapDistanceMeters: 0.2
-  relocalizationSnapRotationDegrees: 75
-  createRuntimeVisual: 1
-  cubeVisualTransform: {fileID: 0}
-  cubeMaterial: {fileID: 2100000, guid: 0d7898f27de359640a79c3567c0ed98f, type: 2}
-  cubeColor: {r: 0.15, g: 1, b: 0.15, a: 1}
-  showLabel: 0
---- !u!1 &1999100020
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 1999100021}
-  - component: {fileID: 1999100022}
-  m_Layer: 0
-  m_Name: CubeTracker_3
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!4 &1999100021
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1999100020}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &1999100022
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1999100020}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f86b69d0d4d24dd19f8cc9db3e5aa75e, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: '::'
-  markerTracker: {fileID: 256051030}
-  cubeLabel: Cube 3
-  cubeMarkerId: 3
-  cubeSizeMeters: 0.0762
-  poseHoldSeconds: 0.75
-  poseSmoothing: 12
-  maxPositionJumpMeters: 0.08
-  maxRotationJumpDegrees: 55
-  outlierFramesBeforeSnap: 2
-  consensusPositionToleranceMeters: 0.025
-  consensusRotationToleranceDegrees: 20
-  maxPositionStepPerUpdateMeters: 0.03
-  maxRotationStepPerUpdateDegrees: 18
-  relocalizationSnapDistanceMeters: 0.2
-  relocalizationSnapRotationDegrees: 75
-  createRuntimeVisual: 1
-  cubeVisualTransform: {fileID: 0}
-  cubeMaterial: {fileID: 2100000, guid: a5433ad4e91a59646b16612ca3d2b5bf, type: 2}
-  cubeColor: {r: 0.15, g: 0.4, b: 1, a: 1}
-  showLabel: 0
---- !u!1 &1999100030
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 1999100031}
-  - component: {fileID: 1999100032}
-  m_Layer: 0
-  m_Name: CubeTracker_4
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!4 &1999100031
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1999100030}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &1999100032
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1999100030}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f86b69d0d4d24dd19f8cc9db3e5aa75e, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: '::'
-  markerTracker: {fileID: 256051030}
-  cubeLabel: Cube 4
-  cubeMarkerId: 4
-  cubeSizeMeters: 0.0762
-  poseHoldSeconds: 0.75
-  poseSmoothing: 12
-  maxPositionJumpMeters: 0.08
-  maxRotationJumpDegrees: 55
-  outlierFramesBeforeSnap: 2
-  consensusPositionToleranceMeters: 0.025
-  consensusRotationToleranceDegrees: 20
-  maxPositionStepPerUpdateMeters: 0.03
-  maxRotationStepPerUpdateDegrees: 18
-  relocalizationSnapDistanceMeters: 0.2
-  relocalizationSnapRotationDegrees: 75
-  createRuntimeVisual: 1
-  cubeVisualTransform: {fileID: 0}
-  cubeMaterial: {fileID: 2100000, guid: 454500733f43e9543bccad873ad59a1e, type: 2}
-  cubeColor: {r: 1, g: 0.9, b: 0.15, a: 1}
-  showLabel: 0
 --- !u!1001 &261566965
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -3072,6 +2821,298 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1999100000
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1999100001}
+  - component: {fileID: 1999100002}
+  m_Layer: 0
+  m_Name: CubeTracker_1
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1999100001
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1999100000}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1999100002
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1999100000}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f86b69d0d4d24dd19f8cc9db3e5aa75e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: '::'
+  markerTracker: {fileID: 256051030}
+  cubeLabel: Cube 1
+  cubeMarkerId: 1
+  cubeSizeMeters: 0.0762
+  poseHoldSeconds: 0.75
+  poseSmoothing: 12
+  maxPositionJumpMeters: 0.08
+  maxRotationJumpDegrees: 55
+  outlierFramesBeforeSnap: 2
+  consensusPositionToleranceMeters: 0.025
+  consensusRotationToleranceDegrees: 20
+  maxPositionStepPerUpdateMeters: 0.03
+  maxRotationStepPerUpdateDegrees: 18
+  relocalizationSnapDistanceMeters: 0.2
+  relocalizationSnapRotationDegrees: 75
+  onlyUpdateWhenHandNear: 0
+  handNearDistanceMeters: 0.18
+  handFarDistanceMeters: 0.26
+  primaryHandTransform: {fileID: 0}
+  secondaryHandTransform: {fileID: 0}
+  requireConfirmationForSingleMarkerFaceSwitch: 1
+  singleMarkerFaceSwitchConfirmationFrames: 3
+  stationaryPositionDeadbandMeters: 0.0025
+  stationaryRotationDeadbandDegrees: 2
+  createRuntimeVisual: 1
+  cubeVisualTransform: {fileID: 0}
+  cubeMaterial: {fileID: 2100000, guid: aefee4b39d9d5f943acec085dbeb009f, type: 2}
+  cubeColor: {r: 1, g: 0.15, b: 0.15, a: 1}
+  showLabel: 0
+--- !u!1 &1999100010
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1999100011}
+  - component: {fileID: 1999100012}
+  m_Layer: 0
+  m_Name: CubeTracker_2
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1999100011
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1999100010}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1999100012
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1999100010}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f86b69d0d4d24dd19f8cc9db3e5aa75e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: '::'
+  markerTracker: {fileID: 256051030}
+  cubeLabel: Cube 2
+  cubeMarkerId: 2
+  cubeSizeMeters: 0.0762
+  poseHoldSeconds: 0.75
+  poseSmoothing: 12
+  maxPositionJumpMeters: 0.08
+  maxRotationJumpDegrees: 55
+  outlierFramesBeforeSnap: 2
+  consensusPositionToleranceMeters: 0.025
+  consensusRotationToleranceDegrees: 20
+  maxPositionStepPerUpdateMeters: 0.03
+  maxRotationStepPerUpdateDegrees: 18
+  relocalizationSnapDistanceMeters: 0.2
+  relocalizationSnapRotationDegrees: 75
+  onlyUpdateWhenHandNear: 0
+  handNearDistanceMeters: 0.18
+  handFarDistanceMeters: 0.26
+  primaryHandTransform: {fileID: 0}
+  secondaryHandTransform: {fileID: 0}
+  requireConfirmationForSingleMarkerFaceSwitch: 1
+  singleMarkerFaceSwitchConfirmationFrames: 3
+  stationaryPositionDeadbandMeters: 0.0025
+  stationaryRotationDeadbandDegrees: 2
+  createRuntimeVisual: 1
+  cubeVisualTransform: {fileID: 0}
+  cubeMaterial: {fileID: 2100000, guid: 0d7898f27de359640a79c3567c0ed98f, type: 2}
+  cubeColor: {r: 0.15, g: 1, b: 0.15, a: 1}
+  showLabel: 0
+--- !u!1 &1999100020
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1999100021}
+  - component: {fileID: 1999100022}
+  m_Layer: 0
+  m_Name: CubeTracker_3
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1999100021
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1999100020}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1999100022
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1999100020}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f86b69d0d4d24dd19f8cc9db3e5aa75e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: '::'
+  markerTracker: {fileID: 256051030}
+  cubeLabel: Cube 3
+  cubeMarkerId: 3
+  cubeSizeMeters: 0.0762
+  poseHoldSeconds: 0.75
+  poseSmoothing: 12
+  maxPositionJumpMeters: 0.08
+  maxRotationJumpDegrees: 55
+  outlierFramesBeforeSnap: 2
+  consensusPositionToleranceMeters: 0.025
+  consensusRotationToleranceDegrees: 20
+  maxPositionStepPerUpdateMeters: 0.03
+  maxRotationStepPerUpdateDegrees: 18
+  relocalizationSnapDistanceMeters: 0.2
+  relocalizationSnapRotationDegrees: 75
+  onlyUpdateWhenHandNear: 0
+  handNearDistanceMeters: 0.18
+  handFarDistanceMeters: 0.26
+  primaryHandTransform: {fileID: 0}
+  secondaryHandTransform: {fileID: 0}
+  requireConfirmationForSingleMarkerFaceSwitch: 1
+  singleMarkerFaceSwitchConfirmationFrames: 3
+  stationaryPositionDeadbandMeters: 0.0025
+  stationaryRotationDeadbandDegrees: 2
+  createRuntimeVisual: 1
+  cubeVisualTransform: {fileID: 0}
+  cubeMaterial: {fileID: 2100000, guid: a5433ad4e91a59646b16612ca3d2b5bf, type: 2}
+  cubeColor: {r: 0.15, g: 0.4, b: 1, a: 1}
+  showLabel: 0
+--- !u!1 &1999100030
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1999100031}
+  - component: {fileID: 1999100032}
+  m_Layer: 0
+  m_Name: CubeTracker_4
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1999100031
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1999100030}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1999100032
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1999100030}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f86b69d0d4d24dd19f8cc9db3e5aa75e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: '::'
+  markerTracker: {fileID: 256051030}
+  cubeLabel: Cube 4
+  cubeMarkerId: 4
+  cubeSizeMeters: 0.0762
+  poseHoldSeconds: 0.75
+  poseSmoothing: 12
+  maxPositionJumpMeters: 0.08
+  maxRotationJumpDegrees: 55
+  outlierFramesBeforeSnap: 2
+  consensusPositionToleranceMeters: 0.025
+  consensusRotationToleranceDegrees: 20
+  maxPositionStepPerUpdateMeters: 0.03
+  maxRotationStepPerUpdateDegrees: 18
+  relocalizationSnapDistanceMeters: 0.2
+  relocalizationSnapRotationDegrees: 75
+  onlyUpdateWhenHandNear: 0
+  handNearDistanceMeters: 0.18
+  handFarDistanceMeters: 0.26
+  primaryHandTransform: {fileID: 0}
+  secondaryHandTransform: {fileID: 0}
+  requireConfirmationForSingleMarkerFaceSwitch: 1
+  singleMarkerFaceSwitchConfirmationFrames: 3
+  stationaryPositionDeadbandMeters: 0.0025
+  stationaryRotationDeadbandDegrees: 2
+  createRuntimeVisual: 1
+  cubeVisualTransform: {fileID: 0}
+  cubeMaterial: {fileID: 2100000, guid: 454500733f43e9543bccad873ad59a1e, type: 2}
+  cubeColor: {r: 1, g: 0.9, b: 0.15, a: 1}
+  showLabel: 0
 --- !u!1 &2012355070
 GameObject:
   m_ObjectHideFlags: 0
@@ -3281,6 +3322,10 @@ PrefabInstance:
       propertyPath: tableTracker
       value: 
       objectReference: {fileID: 256051030}
+    - target: {fileID: 5614793415698552680, guid: 7a67821af7e5bd1408224b6460a3b60e, type: 3}
+      propertyPath: showJointDebugVisuals
+      value: 1
+      objectReference: {fileID: 0}
     - target: {fileID: 5614793415698552680, guid: 7a67821af7e5bd1408224b6460a3b60e, type: 3}
       propertyPath: showRecordingToggleVisual
       value: 0
@@ -3535,3 +3580,7 @@ SceneRoots:
   - {fileID: 256051029}
   - {fileID: 256051032}
   - {fileID: 1964602100}
+  - {fileID: 1999100001}
+  - {fileID: 1999100011}
+  - {fileID: 1999100021}
+  - {fileID: 1999100031}
