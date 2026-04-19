@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using Meta.XR;
-using TMPro;
 using UnityEngine;
 using UnityEngine.Android;
 using UnityEngine.Rendering;
@@ -67,9 +66,43 @@ public class CameraFeedViewer : MonoBehaviour
         public int ConsecutiveOutlierFrames;
     }
 
+    class StackCubeSample
+    {
+        public int CubeId;
+        public Vector3 WorldPosition;
+        public Color Color;
+        public float CubeSize;
+    }
+
+    class DetectedStack
+    {
+        public readonly List<StackCubeSample> Cubes = new List<StackCubeSample>(4);
+        public Vector2 HorizontalCenter;
+        public float Score;
+    }
+
+    class StackHudVisual
+    {
+        public Transform Root;
+        public readonly List<GameObject> Cells = new List<GameObject>(4);
+        public readonly List<Renderer> CellRenderers = new List<Renderer>(4);
+        public readonly List<Material> CellMaterials = new List<Material>(4);
+    }
+
+    class PlacementTargetVisual
+    {
+        public Transform Root;
+        public Transform SurfaceMarker;
+        public Renderer SurfaceRenderer;
+        public Material SurfaceMaterial;
+        public Transform SymbolRoot;
+        public readonly List<Transform> SymbolSegments = new List<Transform>(3);
+        public readonly List<Renderer> SymbolRenderers = new List<Renderer>(3);
+        public readonly List<Material> SymbolMaterials = new List<Material>(3);
+    }
+
     public PassthroughCameraAccess cameraAccess;
     public Renderer targetRenderer;
-    public TextMeshPro debugText;
     public MarkerOverlayMode overlayMode = MarkerOverlayMode.WireframePlane;
     [Min(0.0001f)] public float overlaySurfaceOffset = 0.002f;
     [Min(0.0001f)] public float lineWidth = 0.003f;
@@ -104,10 +137,30 @@ public class CameraFeedViewer : MonoBehaviour
     public bool flipDisplayVertically = true;
     public Transform worldOverlayParent;
     public Transform tableOriginTransform;
-    public XRHandJointVisualizer recorderStatus;
-    public bool debugTextFollowsView = true;
-    [Min(0.1f)] public float debugTextDistance = 0.75f;
-    public Vector2 debugTextViewOffset = new Vector2(0f, -0.12f);
+    public bool showStackHud = true;
+    [Min(0.1f)] public float stackHudDistance = 0.9f;
+    public Vector2 stackHudViewOffset = new Vector2(0.18f, 0.12f);
+    [Min(0.005f)] public float stackHudCellSize = 0.03f;
+    [Min(0f)] public float stackHudCellGap = 0.0075f;
+    [Min(0.0005f)] public float stackHudCellDepth = 0.002f;
+    [Min(0.01f)] public float stackHudStackSpacing = 0.085f;
+    [Min(0.01f)] public float stackGroupingDistanceMeters = 0.055f;
+    [Range(0.2f, 1.2f)] public float stackSupportHorizontalToleranceFactor = 0.45f;
+    [Range(0.2f, 1.2f)] public float stackSupportMinVerticalSpacingFactor = 0.7f;
+    [Range(0.8f, 2.2f)] public float stackSupportMaxVerticalSpacingFactor = 1.35f;
+    [Range(1, 2)] public int maxDetectedStacksToDisplay = 2;
+    [Range(1, 6)] public int stackConfigurationConfirmationFrames = 2;
+    [Range(1, 4)] public int stackConfigurationReleaseFrames = 1;
+    [Range(4f, 30f)] public float stackHudUpdatesPerSecond = 12f;
+    public bool showPlacementTarget = true;
+    [Min(0.05f)] public float placementTargetMinRadiusMeters = 0.12f;
+    [Min(0.08f)] public float placementTargetMaxRadiusMeters = 0.22f;
+    [Min(0.01f)] public float placementTargetSurfaceSizeMeters = 0.09f;
+    [Min(0.001f)] public float placementTargetSurfaceThicknessMeters = 0.004f;
+    [Min(0f)] public float placementTargetSurfaceLiftMeters = 0.002f;
+    [Min(0.02f)] public float placementTargetIndicatorHeightMeters = 0.12f;
+    [Min(0.005f)] public float placementTargetIndicatorScaleMeters = 0.045f;
+    [Min(0.01f)] public float placementTargetMatchRadiusMeters = 0.06f;
 
     Texture2D debugTexture;
     AndroidJavaClass arucoClass;
@@ -122,11 +175,30 @@ public class CameraFeedViewer : MonoBehaviour
     readonly Dictionary<int, MarkerVisual> worldMarkerVisuals = new Dictionary<int, MarkerVisual>();
     readonly List<int> visibleWorldMarkerIds = new List<int>();
     readonly TrackedMarkerPose tableOriginPose = new TrackedMarkerPose();
+    readonly List<ArucoCubeTracker> cubeTrackers = new List<ArucoCubeTracker>(4);
+    readonly List<StackCubeSample> stackCubeSamples = new List<StackCubeSample>(4);
+    readonly List<DetectedStack> detectedStacks = new List<DetectedStack>(2);
+    readonly List<DetectedStack> rawDetectedStacks = new List<DetectedStack>(2);
+    readonly List<StackHudVisual> stackHudVisuals = new List<StackHudVisual>(2);
+    readonly List<DetectedStack> pendingDetectedStacks = new List<DetectedStack>(2);
+    readonly List<DetectedStack> stackCandidateBuffer = new List<DetectedStack>(12);
+    readonly List<StackCubeSample> stackCandidateSampleBuffer = new List<StackCubeSample>(4);
     Pose lastProcessedCameraPose;
     bool hasLastProcessedCameraPose;
+    float lastStackHudEvaluationTime = float.NegativeInfinity;
+    int displayedStackSignatureHash;
+    int pendingStackSignatureHash;
+    int pendingStackSignatureFrames;
+    bool hasPendingStackSignature;
+    PlacementTargetVisual placementTargetVisual;
+    Vector2 placementTargetOffset;
+    int placementTargetCubeId = -1;
+    Color placementTargetCubeColor = Color.white;
+    bool hasPlacementTarget;
 
     Transform overlayRoot;
     Transform worldOverlayRoot;
+    Transform stackHudRoot;
     Material lineMaterial;
     Material fillMaterial;
     Material axisXMaterial; // Add this
@@ -182,6 +254,901 @@ public class CameraFeedViewer : MonoBehaviour
         return results.Count;
     }
 
+    void RefreshCubeTrackers()
+    {
+        cubeTrackers.Clear();
+
+        ArucoCubeTracker[] trackers = FindObjectsByType<ArucoCubeTracker>(FindObjectsSortMode.None);
+        for (int i = 0; i < trackers.Length; i++)
+        {
+            if (trackers[i] != null)
+            {
+                cubeTrackers.Add(trackers[i]);
+            }
+        }
+    }
+
+    void EnsureStackHudInfrastructure()
+    {
+        if (stackHudRoot != null)
+        {
+            return;
+        }
+
+        GameObject root = new GameObject("DetectedStacksHud");
+        stackHudRoot = root.transform;
+    }
+
+    void DestroyStackHudVisuals()
+    {
+        for (int i = 0; i < stackHudVisuals.Count; i++)
+        {
+            StackHudVisual visual = stackHudVisuals[i];
+            if (visual == null)
+            {
+                continue;
+            }
+
+            for (int materialIndex = 0; materialIndex < visual.CellMaterials.Count; materialIndex++)
+            {
+                if (visual.CellMaterials[materialIndex] != null)
+                {
+                    Destroy(visual.CellMaterials[materialIndex]);
+                }
+            }
+
+            if (visual.Root != null)
+            {
+                Destroy(visual.Root.gameObject);
+            }
+        }
+
+        stackHudVisuals.Clear();
+
+        if (stackHudRoot != null)
+        {
+            Destroy(stackHudRoot.gameObject);
+            stackHudRoot = null;
+        }
+    }
+
+    void EnsurePlacementTargetInfrastructure()
+    {
+        if (placementTargetVisual != null && placementTargetVisual.Root != null)
+        {
+            return;
+        }
+
+        GameObject rootObject = new GameObject("PlacementTarget");
+        PlacementTargetVisual visual = new PlacementTargetVisual
+        {
+            Root = rootObject.transform
+        };
+
+        GameObject surface = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        surface.name = "SurfaceMarker";
+        surface.transform.SetParent(visual.Root, false);
+        Collider surfaceCollider = surface.GetComponent<Collider>();
+        if (surfaceCollider != null)
+        {
+            surfaceCollider.enabled = false;
+        }
+
+        visual.SurfaceMarker = surface.transform;
+        visual.SurfaceRenderer = surface.GetComponent<Renderer>();
+        visual.SurfaceRenderer.shadowCastingMode = ShadowCastingMode.Off;
+        visual.SurfaceRenderer.receiveShadows = false;
+        visual.SurfaceMaterial = CreateHudCellMaterial();
+        visual.SurfaceRenderer.sharedMaterial = visual.SurfaceMaterial;
+
+        GameObject symbolRootObject = new GameObject("StatusSymbol");
+        symbolRootObject.transform.SetParent(visual.Root, false);
+        visual.SymbolRoot = symbolRootObject.transform;
+
+        for (int i = 0; i < 3; i++)
+        {
+            GameObject segment = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            segment.name = $"Segment_{i + 1}";
+            segment.transform.SetParent(visual.SymbolRoot, false);
+            Collider segmentCollider = segment.GetComponent<Collider>();
+            if (segmentCollider != null)
+            {
+                segmentCollider.enabled = false;
+            }
+
+            Renderer renderer = segment.GetComponent<Renderer>();
+            renderer.shadowCastingMode = ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+            Material material = CreateHudCellMaterial();
+            renderer.sharedMaterial = material;
+
+            visual.SymbolSegments.Add(segment.transform);
+            visual.SymbolRenderers.Add(renderer);
+            visual.SymbolMaterials.Add(material);
+        }
+
+        rootObject.SetActive(false);
+        placementTargetVisual = visual;
+    }
+
+    void DestroyPlacementTargetVisual()
+    {
+        if (placementTargetVisual == null)
+        {
+            return;
+        }
+
+        if (placementTargetVisual.SurfaceMaterial != null)
+        {
+            Destroy(placementTargetVisual.SurfaceMaterial);
+        }
+
+        for (int i = 0; i < placementTargetVisual.SymbolMaterials.Count; i++)
+        {
+            if (placementTargetVisual.SymbolMaterials[i] != null)
+            {
+                Destroy(placementTargetVisual.SymbolMaterials[i]);
+            }
+        }
+
+        if (placementTargetVisual.Root != null)
+        {
+            Destroy(placementTargetVisual.Root.gameObject);
+        }
+
+        placementTargetVisual = null;
+    }
+
+    void UpdateStackHudTransform()
+    {
+        if (!showStackHud)
+        {
+            if (stackHudRoot != null && stackHudRoot.gameObject.activeSelf)
+            {
+                stackHudRoot.gameObject.SetActive(false);
+            }
+
+            return;
+        }
+
+        EnsureStackHudInfrastructure();
+
+        Transform followTransform = Camera.main != null ? Camera.main.transform : null;
+        if (followTransform == null)
+        {
+            if (stackHudRoot.gameObject.activeSelf)
+            {
+                stackHudRoot.gameObject.SetActive(false);
+            }
+
+            return;
+        }
+
+        if (!stackHudRoot.gameObject.activeSelf)
+        {
+            stackHudRoot.gameObject.SetActive(true);
+        }
+
+        if (stackHudRoot.parent != followTransform)
+        {
+            stackHudRoot.SetParent(followTransform, false);
+        }
+
+        stackHudRoot.localPosition = new Vector3(
+            stackHudViewOffset.x,
+            stackHudViewOffset.y,
+            Mathf.Max(0.1f, stackHudDistance));
+        stackHudRoot.localRotation = Quaternion.identity;
+        stackHudRoot.localScale = Vector3.one;
+    }
+
+    void UpdateStackHudVisuals()
+    {
+        if (!showStackHud || stackHudRoot == null || !stackHudRoot.gameObject.activeInHierarchy)
+        {
+            HideAllStackHudVisuals();
+            return;
+        }
+
+        float updateInterval = 1f / Mathf.Max(4f, stackHudUpdatesPerSecond);
+        if ((Time.unscaledTime - lastStackHudEvaluationTime) >= updateInterval)
+        {
+            DetectStacks();
+            StabilizeDetectedStacks();
+            lastStackHudEvaluationTime = Time.unscaledTime;
+        }
+
+        EnsureStackHudVisualCount(detectedStacks.Count);
+
+        for (int stackIndex = 0; stackIndex < stackHudVisuals.Count; stackIndex++)
+        {
+            bool shouldShow = stackIndex < detectedStacks.Count;
+            StackHudVisual visual = stackHudVisuals[stackIndex];
+            if (visual?.Root == null)
+            {
+                continue;
+            }
+
+            if (visual.Root.gameObject.activeSelf != shouldShow)
+            {
+                visual.Root.gameObject.SetActive(shouldShow);
+            }
+
+            if (!shouldShow)
+            {
+                continue;
+            }
+
+            UpdateStackHudVisual(visual, detectedStacks[stackIndex], stackIndex);
+        }
+    }
+
+    void HideAllStackHudVisuals()
+    {
+        for (int i = 0; i < stackHudVisuals.Count; i++)
+        {
+            if (stackHudVisuals[i]?.Root != null && stackHudVisuals[i].Root.gameObject.activeSelf)
+            {
+                stackHudVisuals[i].Root.gameObject.SetActive(false);
+            }
+        }
+    }
+
+    void DetectStacks()
+    {
+        if (cubeTrackers.Count == 0)
+        {
+            RefreshCubeTrackers();
+        }
+
+        stackCubeSamples.Clear();
+        rawDetectedStacks.Clear();
+
+        for (int i = 0; i < cubeTrackers.Count; i++)
+        {
+            ArucoCubeTracker tracker = cubeTrackers[i];
+            if (tracker == null || !tracker.IsCubeCurrentlyTracked)
+            {
+                continue;
+            }
+
+            if (!tracker.TryGetCurrentCubeWorldPose(out Pose cubePose))
+            {
+                continue;
+            }
+
+            stackCubeSamples.Add(new StackCubeSample
+            {
+                CubeId = tracker.CubeMarkerId,
+                WorldPosition = cubePose.position,
+                Color = tracker.CubeColor,
+                CubeSize = Mathf.Max(0.001f, tracker.CubeSizeMeters)
+            });
+        }
+
+        BuildDetectedStacksFromCandidates();
+    }
+
+    void BuildDetectedStacksFromCandidates()
+    {
+        int sampleCount = stackCubeSamples.Count;
+        if (sampleCount <= 0)
+        {
+            return;
+        }
+
+        stackCandidateBuffer.Clear();
+        int maxMask = 1 << sampleCount;
+        for (int mask = 0; mask < maxMask; mask++)
+        {
+            int selectedCount = CountBits(mask);
+            if (selectedCount < 2)
+            {
+                continue;
+            }
+
+            DetectedStack candidate = TryBuildStackCandidate(mask);
+            if (candidate != null)
+            {
+                stackCandidateBuffer.Add(candidate);
+            }
+        }
+
+        stackCandidateBuffer.Sort((a, b) =>
+        {
+            int sizeComparison = b.Cubes.Count.CompareTo(a.Cubes.Count);
+            if (sizeComparison != 0)
+            {
+                return sizeComparison;
+            }
+
+            return b.Score.CompareTo(a.Score);
+        });
+
+        int usedMask = 0;
+        for (int i = 0; i < stackCandidateBuffer.Count && rawDetectedStacks.Count < maxDetectedStacksToDisplay; i++)
+        {
+            DetectedStack candidate = stackCandidateBuffer[i];
+            int candidateMask = BuildMaskForStack(candidate);
+            if ((usedMask & candidateMask) != 0)
+            {
+                continue;
+            }
+
+            rawDetectedStacks.Add(candidate);
+            usedMask |= candidateMask;
+        }
+
+        rawDetectedStacks.Sort((a, b) =>
+        {
+            int xComparison = a.HorizontalCenter.x.CompareTo(b.HorizontalCenter.x);
+            return xComparison != 0 ? xComparison : a.HorizontalCenter.y.CompareTo(b.HorizontalCenter.y);
+        });
+    }
+
+    void EnsureStackHudVisualCount(int targetCount)
+    {
+        EnsureStackHudInfrastructure();
+
+        while (stackHudVisuals.Count < targetCount)
+        {
+            stackHudVisuals.Add(CreateStackHudVisual(stackHudVisuals.Count));
+        }
+    }
+
+    static Vector3 GetStackVerticalAxis()
+    {
+        return Vector3.up;
+    }
+
+    static float GetVerticalCoordinate(Vector3 worldPosition)
+    {
+        return Vector3.Dot(worldPosition, GetStackVerticalAxis());
+    }
+
+    static Vector2 GetHorizontalCoordinates(Vector3 worldPosition)
+    {
+        Vector3 up = GetStackVerticalAxis();
+        Vector3 planar = worldPosition - (up * Vector3.Dot(worldPosition, up));
+        return new Vector2(planar.x, planar.z);
+    }
+
+    DetectedStack TryBuildStackCandidate(int sampleMask)
+    {
+        stackCandidateSampleBuffer.Clear();
+        for (int sampleIndex = 0; sampleIndex < stackCubeSamples.Count; sampleIndex++)
+        {
+            if ((sampleMask & (1 << sampleIndex)) == 0)
+            {
+                continue;
+            }
+
+            stackCandidateSampleBuffer.Add(stackCubeSamples[sampleIndex]);
+        }
+
+        if (stackCandidateSampleBuffer.Count < 2)
+        {
+            return null;
+        }
+
+        stackCandidateSampleBuffer.Sort((a, b) => GetVerticalCoordinate(a.WorldPosition).CompareTo(GetVerticalCoordinate(b.WorldPosition)));
+
+        float horizontalTolerance = 0f;
+        float verticalScorePenalty = 0f;
+        float horizontalScorePenalty = 0f;
+        Vector2 horizontalCenter = Vector2.zero;
+        for (int i = 0; i < stackCandidateSampleBuffer.Count; i++)
+        {
+            horizontalCenter += GetHorizontalCoordinates(stackCandidateSampleBuffer[i].WorldPosition);
+            horizontalTolerance = Mathf.Max(
+                horizontalTolerance,
+                Mathf.Max(0.01f, stackCandidateSampleBuffer[i].CubeSize * stackSupportHorizontalToleranceFactor, stackGroupingDistanceMeters));
+        }
+
+        horizontalCenter /= stackCandidateSampleBuffer.Count;
+        float maxHorizontalDistanceFromCenter = 0f;
+        for (int i = 0; i < stackCandidateSampleBuffer.Count; i++)
+        {
+            float distanceFromCenter = Vector2.Distance(GetHorizontalCoordinates(stackCandidateSampleBuffer[i].WorldPosition), horizontalCenter);
+            maxHorizontalDistanceFromCenter = Mathf.Max(maxHorizontalDistanceFromCenter, distanceFromCenter);
+        }
+
+        if (maxHorizontalDistanceFromCenter > horizontalTolerance)
+        {
+            return null;
+        }
+
+        for (int i = 0; i < stackCandidateSampleBuffer.Count - 1; i++)
+        {
+            StackCubeSample lower = stackCandidateSampleBuffer[i];
+            StackCubeSample upper = stackCandidateSampleBuffer[i + 1];
+            float averageCubeSize = (lower.CubeSize + upper.CubeSize) * 0.5f;
+            float verticalDelta = GetVerticalCoordinate(upper.WorldPosition) - GetVerticalCoordinate(lower.WorldPosition);
+            float minimumVerticalSpacing = averageCubeSize * stackSupportMinVerticalSpacingFactor;
+            float maximumVerticalSpacing = averageCubeSize * stackSupportMaxVerticalSpacingFactor;
+
+            if (verticalDelta < minimumVerticalSpacing || verticalDelta > maximumVerticalSpacing)
+            {
+                return null;
+            }
+
+            float horizontalDistance = Vector2.Distance(
+                GetHorizontalCoordinates(lower.WorldPosition),
+                GetHorizontalCoordinates(upper.WorldPosition));
+            float pairTolerance = Mathf.Max(0.01f, averageCubeSize * stackSupportHorizontalToleranceFactor, stackGroupingDistanceMeters);
+            if (horizontalDistance > pairTolerance)
+            {
+                return null;
+            }
+
+            verticalScorePenalty += Mathf.Abs(verticalDelta - averageCubeSize);
+            horizontalScorePenalty += horizontalDistance;
+        }
+
+        float totalVerticalSpan =
+            GetVerticalCoordinate(stackCandidateSampleBuffer[stackCandidateSampleBuffer.Count - 1].WorldPosition) -
+            GetVerticalCoordinate(stackCandidateSampleBuffer[0].WorldPosition);
+        float minimumSpan = stackCandidateSampleBuffer[0].CubeSize * stackSupportMinVerticalSpacingFactor;
+        if (totalVerticalSpan < minimumSpan)
+        {
+            return null;
+        }
+
+        DetectedStack candidate = new DetectedStack
+        {
+            HorizontalCenter = horizontalCenter,
+            Score = (stackCandidateSampleBuffer.Count * 100f) - (verticalScorePenalty * 100f) - (horizontalScorePenalty * 100f) - (maxHorizontalDistanceFromCenter * 100f)
+        };
+
+        for (int i = 0; i < stackCandidateSampleBuffer.Count; i++)
+        {
+            candidate.Cubes.Add(stackCandidateSampleBuffer[i]);
+        }
+
+        return candidate;
+    }
+
+    void StabilizeDetectedStacks()
+    {
+        int rawSignatureHash = BuildStackSignatureHash(rawDetectedStacks);
+        if (rawSignatureHash == displayedStackSignatureHash)
+        {
+            pendingStackSignatureHash = 0;
+            pendingStackSignatureFrames = 0;
+            hasPendingStackSignature = false;
+
+            if (rawDetectedStacks.Count > 0)
+            {
+                CopyStacks(rawDetectedStacks, detectedStacks);
+            }
+
+            return;
+        }
+
+        int confirmationFrames = rawDetectedStacks.Count <= 0
+            ? Mathf.Max(1, stackConfigurationReleaseFrames)
+            : Mathf.Max(1, stackConfigurationConfirmationFrames);
+
+        if (!hasPendingStackSignature || rawSignatureHash != pendingStackSignatureHash)
+        {
+            pendingStackSignatureHash = rawSignatureHash;
+            pendingStackSignatureFrames = 1;
+            hasPendingStackSignature = true;
+            CopyStacks(rawDetectedStacks, pendingDetectedStacks);
+            return;
+        }
+
+        pendingStackSignatureFrames++;
+        if (pendingStackSignatureFrames < confirmationFrames)
+        {
+            return;
+        }
+
+        displayedStackSignatureHash = pendingStackSignatureHash;
+        pendingStackSignatureHash = 0;
+        pendingStackSignatureFrames = 0;
+        hasPendingStackSignature = false;
+        CopyStacks(pendingDetectedStacks, detectedStacks);
+    }
+
+    void CopyStacks(List<DetectedStack> source, List<DetectedStack> destination)
+    {
+        destination.Clear();
+        for (int i = 0; i < source.Count; i++)
+        {
+            DetectedStack copy = new DetectedStack
+            {
+                HorizontalCenter = source[i].HorizontalCenter,
+                Score = source[i].Score
+            };
+
+            for (int cubeIndex = 0; cubeIndex < source[i].Cubes.Count; cubeIndex++)
+            {
+                StackCubeSample sourceSample = source[i].Cubes[cubeIndex];
+                copy.Cubes.Add(new StackCubeSample
+                {
+                    CubeId = sourceSample.CubeId,
+                    WorldPosition = sourceSample.WorldPosition,
+                    Color = sourceSample.Color,
+                    CubeSize = sourceSample.CubeSize
+                });
+            }
+
+            destination.Add(copy);
+        }
+    }
+
+    int BuildStackSignatureHash(List<DetectedStack> stacks)
+    {
+        if (stacks == null || stacks.Count == 0)
+        {
+            return 0;
+        }
+
+        int hash = 17;
+        for (int stackIndex = 0; stackIndex < stacks.Count; stackIndex++)
+        {
+            hash = (hash * 31) + stacks[stackIndex].Cubes.Count;
+            for (int cubeIndex = 0; cubeIndex < stacks[stackIndex].Cubes.Count; cubeIndex++)
+            {
+                hash = (hash * 31) + stacks[stackIndex].Cubes[cubeIndex].CubeId;
+            }
+        }
+
+        return hash;
+    }
+
+    void UpdatePlacementTargetVisual()
+    {
+        if (!showPlacementTarget)
+        {
+            if (placementTargetVisual?.Root != null && placementTargetVisual.Root.gameObject.activeSelf)
+            {
+                placementTargetVisual.Root.gameObject.SetActive(false);
+            }
+
+            return;
+        }
+
+        EnsurePlacementTargetInfrastructure();
+        RefreshCubeTrackersIfNeeded();
+
+        if (!TryGetPlacementTargetWorldPosition(out Vector3 worldPosition))
+        {
+            if (placementTargetVisual.Root.gameObject.activeSelf)
+            {
+                placementTargetVisual.Root.gameObject.SetActive(false);
+            }
+
+            return;
+        }
+
+        if (!placementTargetVisual.Root.gameObject.activeSelf)
+        {
+            placementTargetVisual.Root.gameObject.SetActive(true);
+        }
+
+        bool hasMatch = IsTargetCubeAtPlacementTarget(worldPosition);
+        Color statusColor = hasMatch ? new Color(0.2f, 1f, 0.3f, 1f) : new Color(1f, 0.25f, 0.25f, 1f);
+
+        placementTargetVisual.Root.position = worldPosition;
+        placementTargetVisual.Root.rotation = Quaternion.identity;
+
+        float markerRadius = placementTargetSurfaceSizeMeters * 0.5f;
+        placementTargetVisual.SurfaceMarker.localPosition = new Vector3(0f, placementTargetSurfaceLiftMeters, 0f);
+        placementTargetVisual.SurfaceMarker.localScale = new Vector3(markerRadius * 2f, placementTargetSurfaceThicknessMeters * 0.5f, markerRadius * 2f);
+        SetMaterialColor(placementTargetVisual.SurfaceMaterial, placementTargetCubeColor);
+
+        placementTargetVisual.SymbolRoot.localPosition = new Vector3(0f, placementTargetIndicatorHeightMeters, 0f);
+        placementTargetVisual.SymbolRoot.localRotation = Quaternion.identity;
+        placementTargetVisual.SymbolRoot.localScale = Vector3.one;
+
+        UpdatePlacementTargetSymbol(hasMatch, statusColor);
+    }
+
+    void RefreshCubeTrackersIfNeeded()
+    {
+        if (cubeTrackers.Count == 0)
+        {
+            RefreshCubeTrackers();
+        }
+    }
+
+    bool TryGetPlacementTargetWorldPosition(out Vector3 worldPosition)
+    {
+        worldPosition = default;
+        if (!TryGetTableOriginPose(out Pose tablePose))
+        {
+            return false;
+        }
+
+        if (!hasPlacementTarget)
+        {
+            RandomizePlacementTarget();
+        }
+
+        if (!hasPlacementTarget)
+        {
+            return false;
+        }
+
+        worldPosition = new Vector3(
+            tablePose.position.x + placementTargetOffset.x,
+            tablePose.position.y,
+            tablePose.position.z + placementTargetOffset.y);
+        return true;
+    }
+
+    void RandomizePlacementTarget()
+    {
+        RefreshCubeTrackersIfNeeded();
+
+        List<ArucoCubeTracker> validTrackers = new List<ArucoCubeTracker>(cubeTrackers.Count);
+        for (int i = 0; i < cubeTrackers.Count; i++)
+        {
+            if (cubeTrackers[i] != null)
+            {
+                validTrackers.Add(cubeTrackers[i]);
+            }
+        }
+
+        if (validTrackers.Count <= 0)
+        {
+            hasPlacementTarget = false;
+            placementTargetCubeId = -1;
+            return;
+        }
+
+        ArucoCubeTracker selectedTracker = validTrackers[UnityEngine.Random.Range(0, validTrackers.Count)];
+        placementTargetCubeId = selectedTracker.CubeMarkerId;
+        placementTargetCubeColor = selectedTracker.CubeColor;
+
+        float minRadius = Mathf.Max(0.05f, placementTargetMinRadiusMeters);
+        float maxRadius = Mathf.Max(minRadius + 0.01f, placementTargetMaxRadiusMeters);
+        float angleRadians = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
+        float radius = UnityEngine.Random.Range(minRadius, maxRadius);
+        placementTargetOffset = new Vector2(Mathf.Cos(angleRadians), Mathf.Sin(angleRadians)) * radius;
+        hasPlacementTarget = true;
+    }
+
+    bool IsTargetCubeAtPlacementTarget(Vector3 targetWorldPosition)
+    {
+        if (placementTargetCubeId < 0)
+        {
+            return false;
+        }
+
+        Vector2 targetHorizontal = new Vector2(targetWorldPosition.x, targetWorldPosition.z);
+        float matchRadius = Mathf.Max(0.01f, placementTargetMatchRadiusMeters);
+
+        for (int i = 0; i < cubeTrackers.Count; i++)
+        {
+            ArucoCubeTracker tracker = cubeTrackers[i];
+            if (tracker == null || tracker.CubeMarkerId != placementTargetCubeId)
+            {
+                continue;
+            }
+
+            if (!tracker.TryGetCurrentCubeWorldPose(out Pose cubePose))
+            {
+                continue;
+            }
+
+            Vector2 cubeHorizontal = new Vector2(cubePose.position.x, cubePose.position.z);
+            if (Vector2.Distance(targetHorizontal, cubeHorizontal) <= matchRadius)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    void UpdatePlacementTargetSymbol(bool showCheck, Color symbolColor)
+    {
+        float thickness = placementTargetIndicatorScaleMeters * 0.18f;
+        float length = placementTargetIndicatorScaleMeters;
+
+        for (int i = 0; i < placementTargetVisual.SymbolSegments.Count; i++)
+        {
+            bool shouldShow = showCheck ? i < 2 : i < 2;
+            if (placementTargetVisual.SymbolSegments[i].gameObject.activeSelf != shouldShow)
+            {
+                placementTargetVisual.SymbolSegments[i].gameObject.SetActive(shouldShow);
+            }
+
+            if (shouldShow)
+            {
+                SetMaterialColor(placementTargetVisual.SymbolMaterials[i], symbolColor);
+            }
+        }
+
+        if (showCheck)
+        {
+            placementTargetVisual.SymbolSegments[0].localPosition = new Vector3(-length * 0.18f, -length * 0.08f, 0f);
+            placementTargetVisual.SymbolSegments[0].localRotation = Quaternion.Euler(0f, 0f, 45f);
+            placementTargetVisual.SymbolSegments[0].localScale = new Vector3(thickness, length * 0.45f, thickness);
+
+            placementTargetVisual.SymbolSegments[1].localPosition = new Vector3(length * 0.05f, length * 0.08f, 0f);
+            placementTargetVisual.SymbolSegments[1].localRotation = Quaternion.Euler(0f, 0f, -45f);
+            placementTargetVisual.SymbolSegments[1].localScale = new Vector3(thickness, length * 0.9f, thickness);
+        }
+        else
+        {
+            placementTargetVisual.SymbolSegments[0].localPosition = Vector3.zero;
+            placementTargetVisual.SymbolSegments[0].localRotation = Quaternion.Euler(0f, 0f, 45f);
+            placementTargetVisual.SymbolSegments[0].localScale = new Vector3(thickness, length, thickness);
+
+            placementTargetVisual.SymbolSegments[1].localPosition = Vector3.zero;
+            placementTargetVisual.SymbolSegments[1].localRotation = Quaternion.Euler(0f, 0f, -45f);
+            placementTargetVisual.SymbolSegments[1].localScale = new Vector3(thickness, length, thickness);
+        }
+
+        if (placementTargetVisual.SymbolSegments.Count > 2 &&
+            placementTargetVisual.SymbolSegments[2].gameObject.activeSelf)
+        {
+            placementTargetVisual.SymbolSegments[2].gameObject.SetActive(false);
+        }
+    }
+
+    void SetMaterialColor(Material material, Color color)
+    {
+        if (material == null)
+        {
+            return;
+        }
+
+        if (material.HasProperty("_BaseColor"))
+        {
+            material.SetColor("_BaseColor", color);
+        }
+        else if (material.HasProperty("_Color"))
+        {
+            material.SetColor("_Color", color);
+        }
+    }
+
+    int BuildMaskForStack(DetectedStack stack)
+    {
+        int mask = 0;
+        for (int cubeIndex = 0; cubeIndex < stack.Cubes.Count; cubeIndex++)
+        {
+            for (int sampleIndex = 0; sampleIndex < stackCubeSamples.Count; sampleIndex++)
+            {
+                if (stackCubeSamples[sampleIndex].CubeId != stack.Cubes[cubeIndex].CubeId)
+                {
+                    continue;
+                }
+
+                mask |= 1 << sampleIndex;
+                break;
+            }
+        }
+
+        return mask;
+    }
+
+    int CountBits(int value)
+    {
+        int count = 0;
+        while (value != 0)
+        {
+            count += value & 1;
+            value >>= 1;
+        }
+
+        return count;
+    }
+
+    StackHudVisual CreateStackHudVisual(int index)
+    {
+        GameObject rootObject = new GameObject($"DetectedStack_{index + 1}");
+        Transform rootTransform = rootObject.transform;
+        rootTransform.SetParent(stackHudRoot, false);
+
+        StackHudVisual visual = new StackHudVisual
+        {
+            Root = rootTransform
+        };
+
+        for (int cellIndex = 0; cellIndex < 4; cellIndex++)
+        {
+            GameObject cell = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            cell.name = $"Cell_{cellIndex + 1}";
+            cell.transform.SetParent(rootTransform, false);
+            cell.transform.localRotation = Quaternion.identity;
+            cell.transform.localScale = new Vector3(stackHudCellSize, stackHudCellSize, stackHudCellDepth);
+
+            Collider collider = cell.GetComponent<Collider>();
+            if (collider != null)
+            {
+                collider.enabled = false;
+            }
+
+            Renderer renderer = cell.GetComponent<Renderer>();
+            renderer.shadowCastingMode = ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+            Material material = CreateHudCellMaterial();
+            renderer.sharedMaterial = material;
+
+            visual.Cells.Add(cell);
+            visual.CellRenderers.Add(renderer);
+            visual.CellMaterials.Add(material);
+        }
+
+        rootObject.SetActive(false);
+        return visual;
+    }
+
+    Material CreateHudCellMaterial()
+    {
+        Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
+        if (shader == null)
+        {
+            shader = Shader.Find("Unlit/Color");
+        }
+
+        if (shader == null)
+        {
+            shader = Shader.Find("Standard");
+        }
+
+        Material material = new Material(shader);
+        if (material.HasProperty("_Surface"))
+        {
+            material.SetFloat("_Surface", 0f);
+        }
+
+        if (material.HasProperty("_BaseColor"))
+        {
+            material.SetColor("_BaseColor", Color.white);
+        }
+        else if (material.HasProperty("_Color"))
+        {
+            material.SetColor("_Color", Color.white);
+        }
+
+        return material;
+    }
+
+    void UpdateStackHudVisual(StackHudVisual visual, DetectedStack stack, int stackIndex)
+    {
+        int visibleCellCount = Mathf.Min(visual.Cells.Count, stack.Cubes.Count);
+        float totalHeight = (visibleCellCount * stackHudCellSize) + (Mathf.Max(0, visibleCellCount - 1) * stackHudCellGap);
+        float leftOffset = -((Mathf.Max(1, detectedStacks.Count) - 1) * stackHudStackSpacing * 0.5f);
+        visual.Root.localPosition = new Vector3(leftOffset + (stackIndex * stackHudStackSpacing), 0f, 0f);
+
+        for (int cellIndex = 0; cellIndex < visual.Cells.Count; cellIndex++)
+        {
+            bool shouldShow = cellIndex < stack.Cubes.Count;
+            GameObject cell = visual.Cells[cellIndex];
+            if (cell.activeSelf != shouldShow)
+            {
+                cell.SetActive(shouldShow);
+            }
+
+            if (!shouldShow)
+            {
+                continue;
+            }
+
+            float y = -totalHeight * 0.5f + (cellIndex * (stackHudCellSize + stackHudCellGap)) + (stackHudCellSize * 0.5f);
+            cell.transform.localPosition = new Vector3(0f, y, 0f);
+            cell.transform.localScale = new Vector3(stackHudCellSize, stackHudCellSize, stackHudCellDepth);
+
+            Material material = visual.CellMaterials[cellIndex];
+            Color color = stack.Cubes[cellIndex].Color;
+            if (material.HasProperty("_BaseColor"))
+            {
+                material.SetColor("_BaseColor", color);
+            }
+            else if (material.HasProperty("_Color"))
+            {
+                material.SetColor("_Color", color);
+            }
+        }
+    }
+
     void Start()
     {
         // These are serialized fields, so scene instances keep old values until explicitly changed.
@@ -197,6 +1164,9 @@ public class CameraFeedViewer : MonoBehaviour
         arucoClass = new AndroidJavaClass("com.GeorgiaTech.aruco.ArucoBridge");
         EnsureOverlayInfrastructure();
         EnsureWorldOverlayInfrastructure();
+        EnsureStackHudInfrastructure();
+        RefreshCubeTrackers();
+        EnsurePlacementTargetInfrastructure();
         ApplyTextureOrientation();
     }
 
@@ -219,6 +1189,8 @@ public class CameraFeedViewer : MonoBehaviour
 
         DestroyMarkerVisualSet(markerVisuals);
         DestroyMarkerVisualSet(worldMarkerVisuals);
+        DestroyStackHudVisuals();
+        DestroyPlacementTargetVisual();
     }
 
     int DetectMarkerCount(byte[] image, int width, int height)
@@ -298,7 +1270,9 @@ public class CameraFeedViewer : MonoBehaviour
 
     void LateUpdate()
     {
-        UpdateDebugTextTransform();
+        UpdateStackHudTransform();
+        UpdateStackHudVisuals();
+        UpdatePlacementTargetVisual();
     }
 
     void OnReadbackComplete(AsyncGPUReadbackRequest request, int width, int height, Pose cameraPose, Vector2Int currentResolution, PassthroughCameraAccess.CameraIntrinsics cameraIntrinsics)
@@ -424,64 +1398,7 @@ public class CameraFeedViewer : MonoBehaviour
         {
             HideInactiveVisuals(worldMarkerVisuals);
         }
-        int markerCount = Mathf.Max(markerDetections.Count, markerPoseDetections.Count);
-        UpdateDebugText(markerCount, width, height);
         isProcessing = false;
-    }
-
-    void UpdateDebugText(int markerCount, int width, int height)
-    {
-        if (debugText == null)
-        {
-            return;
-        }
-
-        string tableFound = tableOriginPose.IsTracked ? "Yes" : "No";
-        string tablePosition = tableOriginPose.IsTracked
-            ? $"{tableOriginPose.Position.x:F3}, {tableOriginPose.Position.y:F3}, {tableOriginPose.Position.z:F3}"
-            : "--";
-        if (recorderStatus == null)
-        {
-            recorderStatus = FindFirstObjectByType<XRHandJointVisualizer>();
-        }
-
-        string lastSavePath = recorderStatus != null && !string.IsNullOrWhiteSpace(recorderStatus.LastSavedFilePath)
-            ? recorderStatus.LastSavedFilePath
-            : "--";
-
-        debugText.text =
-            $"Markers detected: {Mathf.Max(0, markerCount)}\n" +
-            $"Table found? {tableFound}\n" +
-            $"Table position: {tablePosition}\n" +
-            $"Last save: {lastSavePath}";
-    }
-
-    void UpdateDebugTextTransform()
-    {
-        if (!debugTextFollowsView || debugText == null)
-        {
-            return;
-        }
-
-        Transform followTransform = Camera.main != null ? Camera.main.transform : null;
-        if (followTransform == null)
-        {
-            return;
-        }
-
-        Vector3 targetPosition =
-            followTransform.position +
-            followTransform.forward * Mathf.Max(0.1f, debugTextDistance) +
-            followTransform.right * debugTextViewOffset.x +
-            followTransform.up * debugTextViewOffset.y;
-
-        debugText.transform.position = targetPosition;
-
-        Vector3 towardCamera = followTransform.position - targetPosition;
-        if (towardCamera.sqrMagnitude > 1e-6f)
-        {
-            debugText.transform.rotation = Quaternion.LookRotation(towardCamera.normalized, followTransform.up) * Quaternion.Euler(0f, 180f, 0f);
-        }
     }
 
     void ParseMarkerData(float[] markerData, List<MarkerDetection> results)

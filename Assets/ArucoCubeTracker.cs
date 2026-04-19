@@ -72,6 +72,10 @@ public class ArucoCubeTracker : MonoBehaviour
     public Transform secondaryHandTransform;
     public bool requireConfirmationForSingleMarkerFaceSwitch = true;
     [Range(1, 8)] public int singleMarkerFaceSwitchConfirmationFrames = 3;
+    public bool requireConfirmationForSingleMarkerLargeRotation = true;
+    [Range(1f, 90f)] public float singleMarkerMaxTrustedRotationDeltaDegrees = 20f;
+    [Range(1, 8)] public int singleMarkerLargeRotationConfirmationFrames = 4;
+    [Range(1f, 45f)] public float singleMarkerRotationConfirmationToleranceDegrees = 10f;
     [Min(0f)] public float stationaryPositionDeadbandMeters = 0.0025f;
     [Range(0f, 45f)] public float stationaryRotationDeadbandDegrees = 2f;
     public bool createRuntimeVisual = true;
@@ -89,6 +93,9 @@ public class ArucoCubeTracker : MonoBehaviour
     int lastResolvedFaceIndex = -1;
     int pendingSingleMarkerFaceIndex = -1;
     int pendingSingleMarkerFaceFrames;
+    bool hasPendingSingleMarkerRotation;
+    Quaternion pendingSingleMarkerRotation = Quaternion.identity;
+    int pendingSingleMarkerRotationFrames;
     bool handWasNearLastUpdate;
     XRHandJointVisualizer handVisualizer;
 
@@ -106,6 +113,10 @@ public class ArucoCubeTracker : MonoBehaviour
 
     public bool IsCubeCurrentlyTracked => trackedPose.IsTracked;
     public bool HasCubePose => trackedPose.HasPose;
+    public string CubeLabel => cubeLabel;
+    public Color CubeColor => cubeColor;
+    public float CubeSizeMeters => cubeSizeMeters;
+    public int CubeMarkerId => cubeMarkerId;
 
     public bool TryGetCubePoseRelativeToTable(out Pose pose)
     {
@@ -119,6 +130,29 @@ public class ArucoCubeTracker : MonoBehaviour
         Quaternion localRotation = Quaternion.Inverse(tablePose.rotation) * trackedPose.Rotation;
         pose = new Pose(localPosition, localRotation);
         return true;
+    }
+
+    public bool TryGetCurrentCubeWorldPose(out Pose pose)
+    {
+        pose = default;
+        if (!trackedPose.HasPose || !trackedPose.IsTracked)
+        {
+            return false;
+        }
+
+        pose = new Pose(trackedPose.Position, trackedPose.Rotation);
+        return true;
+    }
+
+    public bool TryGetCurrentCubePoseRelativeToTable(out Pose pose)
+    {
+        pose = default;
+        if (!trackedPose.IsTracked)
+        {
+            return false;
+        }
+
+        return TryGetCubePoseRelativeToTable(out pose);
     }
 
     void Update()
@@ -141,7 +175,7 @@ public class ArucoCubeTracker : MonoBehaviour
             return;
         }
 
-        if (!TryResolveCubePose(markerPoseBuffer, out Vector3 worldPosition, out Quaternion worldRotation))
+        if (!TryResolveCubePose(markerPoseBuffer, out Vector3 worldPosition, out Quaternion worldRotation, out int visibleMarkerCount))
         {
             trackedPose.IsTracked = false;
             trackedPose.IsVisible = trackedPose.HasPose;
@@ -157,7 +191,7 @@ public class ArucoCubeTracker : MonoBehaviour
             return;
         }
 
-        ApplyTrackedPose(worldPosition, worldRotation);
+        ApplyTrackedPose(worldPosition, worldRotation, visibleMarkerCount);
         UpdateVisual();
     }
 
@@ -232,10 +266,11 @@ public class ArucoCubeTracker : MonoBehaviour
         }
     }
 
-    bool TryResolveCubePose(List<Pose> markerPoses, out Vector3 worldPosition, out Quaternion worldRotation)
+    bool TryResolveCubePose(List<Pose> markerPoses, out Vector3 worldPosition, out Quaternion worldRotation, out int visibleMarkerCount)
     {
         worldPosition = default;
         worldRotation = Quaternion.identity;
+        visibleMarkerCount = markerPoses != null ? markerPoses.Count : 0;
 
         candidateBuffer.Clear();
         float halfCube = cubeSizeMeters * 0.5f;
@@ -354,6 +389,7 @@ public class ArucoCubeTracker : MonoBehaviour
             return false;
         }
 
+        worldRotation = StabilizeSingleMarkerRotation(markerPoses.Count, worldRotation);
         lastResolvedFaceIndex = bestCandidate.FaceIndex;
         return true;
     }
@@ -364,6 +400,7 @@ public class ArucoCubeTracker : MonoBehaviour
         {
             pendingSingleMarkerFaceIndex = -1;
             pendingSingleMarkerFaceFrames = 0;
+            ResetPendingSingleMarkerRotation();
             return true;
         }
 
@@ -371,6 +408,7 @@ public class ArucoCubeTracker : MonoBehaviour
         {
             pendingSingleMarkerFaceIndex = -1;
             pendingSingleMarkerFaceFrames = 0;
+            ResetPendingSingleMarkerRotation();
             return true;
         }
 
@@ -399,6 +437,50 @@ public class ArucoCubeTracker : MonoBehaviour
         return true;
     }
 
+    Quaternion StabilizeSingleMarkerRotation(int visibleMarkerCount, Quaternion candidateRotation)
+    {
+        if (!requireConfirmationForSingleMarkerLargeRotation ||
+            visibleMarkerCount != 1 ||
+            !trackedPose.HasPose)
+        {
+            ResetPendingSingleMarkerRotation();
+            return candidateRotation;
+        }
+
+        float rotationDelta = Quaternion.Angle(trackedPose.Rotation, candidateRotation);
+        if (rotationDelta <= singleMarkerMaxTrustedRotationDeltaDegrees)
+        {
+            ResetPendingSingleMarkerRotation();
+            return candidateRotation;
+        }
+
+        if (!hasPendingSingleMarkerRotation ||
+            Quaternion.Angle(pendingSingleMarkerRotation, candidateRotation) > singleMarkerRotationConfirmationToleranceDegrees)
+        {
+            pendingSingleMarkerRotation = candidateRotation;
+            pendingSingleMarkerRotationFrames = 1;
+            hasPendingSingleMarkerRotation = true;
+            return trackedPose.Rotation;
+        }
+
+        pendingSingleMarkerRotationFrames++;
+        if (pendingSingleMarkerRotationFrames < Mathf.Max(1, singleMarkerLargeRotationConfirmationFrames))
+        {
+            return trackedPose.Rotation;
+        }
+
+        Quaternion acceptedRotation = pendingSingleMarkerRotation;
+        ResetPendingSingleMarkerRotation();
+        return acceptedRotation;
+    }
+
+    void ResetPendingSingleMarkerRotation()
+    {
+        hasPendingSingleMarkerRotation = false;
+        pendingSingleMarkerRotation = Quaternion.identity;
+        pendingSingleMarkerRotationFrames = 0;
+    }
+
     Quaternion AverageRotation(Quaternion currentAverage, Quaternion nextRotation, int sampleCount)
     {
         if (sampleCount <= 1)
@@ -416,7 +498,7 @@ public class ArucoCubeTracker : MonoBehaviour
         return Quaternion.Slerp(currentAverage, nextRotation, blend);
     }
 
-    void ApplyTrackedPose(Vector3 worldPosition, Quaternion worldRotation)
+    void ApplyTrackedPose(Vector3 worldPosition, Quaternion worldRotation, int visibleMarkerCount)
     {
         if (!trackedPose.HasPose)
         {
@@ -448,7 +530,7 @@ public class ArucoCubeTracker : MonoBehaviour
             return;
         }
 
-        bool isLargeJump = trackedPose.IsTracked &&
+        bool isLargeJump = trackedPose.HasPose &&
             (maxPositionJumpMeters > 0f && positionDelta > maxPositionJumpMeters ||
              maxRotationJumpDegrees > 0f && rotationDelta > maxRotationJumpDegrees);
 
