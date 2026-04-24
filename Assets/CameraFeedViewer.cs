@@ -137,6 +137,7 @@ public class CameraFeedViewer : MonoBehaviour
     public bool flipDisplayVertically = true;
     public Transform worldOverlayParent;
     public Transform tableOriginTransform;
+    public bool applyTrackedTableRotationToAnchor = true;
     public bool showStackHud = true;
     [Min(0.1f)] public float stackHudDistance = 0.9f;
     public Vector2 stackHudViewOffset = new Vector2(0.18f, 0.12f);
@@ -1819,7 +1820,14 @@ public class CameraFeedViewer : MonoBehaviour
 
         if (tableOriginTransform != null && tableOriginPose.HasPose)
         {
-            tableOriginTransform.SetPositionAndRotation(tableOriginPose.Position, tableOriginPose.Rotation);
+            if (applyTrackedTableRotationToAnchor)
+            {
+                tableOriginTransform.SetPositionAndRotation(tableOriginPose.Position, tableOriginPose.Rotation);
+            }
+            else
+            {
+                tableOriginTransform.position = tableOriginPose.Position;
+            }
         }
     }
 
