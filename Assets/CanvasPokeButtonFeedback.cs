@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
+using System;
 
 public class CanvasPokeButtonFeedback : MonoBehaviour, IPointerDownHandler, IPointerUpHandler, IPointerExitHandler, IPointerClickHandler
 {
@@ -14,6 +15,20 @@ public class CanvasPokeButtonFeedback : MonoBehaviour, IPointerDownHandler, IPoi
     [SerializeField] private UnityEvent onClicked;
 
     private bool _isPressed;
+
+    public event Action Clicked;
+
+    public void SetIdleText(string value)
+    {
+        idleText = value;
+        ApplyVisualState();
+    }
+
+    public void SetPressedText(string value)
+    {
+        pressedText = value;
+        ApplyVisualState();
+    }
 
     private void OnEnable()
     {
@@ -41,6 +56,7 @@ public class CanvasPokeButtonFeedback : MonoBehaviour, IPointerDownHandler, IPoi
 
     public void OnPointerClick(PointerEventData eventData)
     {
+        Clicked?.Invoke();
         onClicked?.Invoke();
     }
 
