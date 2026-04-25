@@ -24,10 +24,22 @@ public class XRHandJointVisualizer : MonoBehaviour
     public bool requireTrackedTableToStartRecording = false;
     public bool showRecordingToggleVisual = true;
     [Min(0.01f)] public float recordingToggleVisualScale = 0.035f;
+    public bool stabilizeRecordedHandData = true;
+    [Min(0.01f)] public float rootPositionSmoothing = 18f;
+    [Min(0.01f)] public float rootRotationSmoothing = 20f;
+    [Min(0.01f)] public float jointRotationSmoothing = 24f;
+    [Min(0f)] public float occlusionSpikeAngleDegrees = 22f;
+    [Min(0f)] public float occlusionAngularVelocityThreshold = 540f;
+    [Min(0f)] public float occlusionHoldSeconds = 0.12f;
+    [Range(0f, 1f)] public float occlusionBlendMultiplier = 0.18f;
+    public bool recordWristTransforms = true;
+    public bool recordFingerTipPositions = true;
+    public bool recordJointRotations = false;
 
     private List<GameObject> jointObjects = new List<GameObject>();
     private List<GameObject> jointSpheres = new List<GameObject>();
     private List<TextMesh> jointLabels = new List<TextMesh>();
+    private Dictionary<string, FilteredRotationState> filteredJointRotations = new Dictionary<string, FilteredRotationState>();
 
     private int debugLayer;
     private GameObject recordingToggleVisual;
@@ -37,14 +49,30 @@ public class XRHandJointVisualizer : MonoBehaviour
     private OVRHand leftOvrHand;
     private Transform leftThumbTip;
     private Transform leftIndexTip;
+    private Transform recordedThumbTip;
+    private Transform recordedIndexTip;
+    private Transform recordedMiddleTip;
+    private Transform recordedRingTip;
+    private Transform recordedLittleTip;
 
     // Recording Tools
     public bool isRecording;
     public float recordStartTime = 0f;
     public string LastSavedFilePath { get; private set; } = "";
     private List<string> recordedLines = new List<string>();
+    private int recordedFrameCount;
     private Pose recordingStartTableOriginPose;
     private bool hasRecordingStartTableOriginPose;
+    private bool hasStabilizedRootLocalPosition;
+    private Vector3 stabilizedRootLocalPosition;
+    private bool hasStabilizedRootLocalRotation;
+    private Quaternion stabilizedRootLocalRotation = Quaternion.identity;
+    private bool hasStabilizedRootWorldPosition;
+    private Vector3 stabilizedRootWorldPosition;
+    private bool hasStabilizedRootWorldRotation;
+    private Quaternion stabilizedRootWorldRotation = Quaternion.identity;
+    private List<JointDistanceRecord> recordingStartJointDistances = new List<JointDistanceRecord>();
+    private List<JointOffsetRecord> recordingStartWristToFingerBaseMeasurements = new List<JointOffsetRecord>();
     private HashSet<string> targetJoints = new HashSet<string>()
     {
         // All joints shown here show significant rotation and are key to hand movement
@@ -71,6 +99,28 @@ public class XRHandJointVisualizer : MonoBehaviour
         "XRHand_IndexDistal"
     };
 
+    private struct FilteredRotationState
+    {
+        public bool initialized;
+        public Quaternion rotation;
+        public float lastReliableTime;
+    }
+
+    private struct JointDistanceRecord
+    {
+        public string fromJoint;
+        public string toJoint;
+        public float distanceMeters;
+    }
+
+    private struct JointOffsetRecord
+    {
+        public string fromJoint;
+        public string toJoint;
+        public Vector3 offsetMeters;
+        public float distanceMeters;
+    }
+
     void Start()
     {
         if (Hand == null)
@@ -85,6 +135,7 @@ public class XRHandJointVisualizer : MonoBehaviour
 
         // Collect joints
         GetChildrenRecursive(Hand);
+        CacheRecordedThumbTip();
         if (usePinchToggle)
         {
             CacheLeftOvrHand();
@@ -131,6 +182,7 @@ public class XRHandJointVisualizer : MonoBehaviour
 
         UpdateRecordingToggleVisual();
         UpdateRecordingToggle();
+        UpdateStabilizedTrackingState(Time.deltaTime);
 
         for (int i = 0; i < jointObjects.Count; i++)
         {
@@ -169,6 +221,9 @@ public class XRHandJointVisualizer : MonoBehaviour
         isRecording = true;
         recordStartTime = Time.time;
         recordedLines.Clear();
+        recordedFrameCount = 0;
+        CaptureRecordingStartJointDistances();
+        AppendRecordingMetadataLine();
         if (!freezeTableOriginOnRecordingStart)
         {
             hasRecordingStartTableOriginPose = false;
@@ -219,25 +274,44 @@ public class XRHandJointVisualizer : MonoBehaviour
 
         StringBuilder sb = new StringBuilder();
         sb.Append("{");
+        sb.Append("\"recordType\":\"frame\",");
+        sb.AppendFormat("\"frameIndex\":{0},", recordedFrameCount++);
+        sb.AppendFormat("\"jointRotationsRecorded\":{0},", recordJointRotations ? "true" : "false");
 
         // Time
         sb.AppendFormat("\"time\":{0},", t);
 
         Transform root = Hand.transform;
-        Vector3 localPosition = root.localPosition;
-        Quaternion localRotation = root.localRotation;
-        AppendPoseObject(sb, "handRootLocal", localPosition, localRotation);
+        Vector3 localPosition = stabilizeRecordedHandData && hasStabilizedRootLocalPosition
+            ? stabilizedRootLocalPosition
+            : root.localPosition;
+        Quaternion localRotation = stabilizeRecordedHandData && hasStabilizedRootLocalRotation
+            ? stabilizedRootLocalRotation
+            : root.localRotation;
+        if (recordWristTransforms)
+        {
+            AppendPoseObject(sb, "handRootLocal", localPosition, localRotation);
+        }
 
-        AppendPoseObject(sb, "handRootWorld", root.position, root.rotation);
+        Vector3 worldPosition = stabilizeRecordedHandData && hasStabilizedRootWorldPosition
+            ? stabilizedRootWorldPosition
+            : root.position;
+        Quaternion worldRotation = stabilizeRecordedHandData && hasStabilizedRootWorldRotation
+            ? stabilizedRootWorldRotation
+            : root.rotation;
+        if (recordWristTransforms)
+        {
+            AppendPoseObject(sb, "handRootWorld", worldPosition, worldRotation);
+        }
 
         Pose liveTableOriginPose = default;
         bool hasLiveTableOrigin = tableTracker != null && tableTracker.TryGetTableOriginPose(out liveTableOriginPose);
         sb.AppendFormat("\"tableOriginTracked\":{0},", hasLiveTableOrigin ? "true" : "false");
-        Vector3 recordedRootPosition = root.position;
-        Quaternion recordedRootRotation = root.rotation;
+        Vector3 recordedRootPosition = worldPosition;
+        Quaternion recordedRootRotation = worldRotation;
         string recordedRootSpace = "world";
 
-        if (hasLiveTableOrigin)
+        if (recordWristTransforms && hasLiveTableOrigin)
         {
             AppendPoseObject(sb, "tableOriginWorld", liveTableOriginPose.position, liveTableOriginPose.rotation);
         }
@@ -258,11 +332,14 @@ public class XRHandJointVisualizer : MonoBehaviour
                 recordingTableOriginPose = recordingStartTableOriginPose;
                 hasRecordingTableOrigin = true;
                 sb.AppendFormat("\"tableOriginFrozen\":true,");
-                AppendPoseObject(
-                    sb,
-                    "tableOriginRecordingStartWorld",
-                    recordingStartTableOriginPose.position,
-                    recordingStartTableOriginPose.rotation);
+                if (recordWristTransforms)
+                {
+                    AppendPoseObject(
+                        sb,
+                        "tableOriginRecordingStartWorld",
+                        recordingStartTableOriginPose.position,
+                        recordingStartTableOriginPose.rotation);
+                }
             }
             else
             {
@@ -278,29 +355,43 @@ public class XRHandJointVisualizer : MonoBehaviour
         {
             Vector3 tableRelativePosition =
                 Quaternion.Inverse(recordingTableOriginPose.rotation) *
-                (root.position - recordingTableOriginPose.position);
+                (worldPosition - recordingTableOriginPose.position);
             Quaternion tableRelativeRotation =
-                Quaternion.Inverse(recordingTableOriginPose.rotation) * root.rotation;
-            AppendPoseObject(sb, "handRootTable", tableRelativePosition, tableRelativeRotation);
+                Quaternion.Inverse(recordingTableOriginPose.rotation) * worldRotation;
+            if (recordWristTransforms)
+            {
+                AppendPoseObject(sb, "handRootTable", tableRelativePosition, tableRelativeRotation);
+            }
             recordedRootPosition = tableRelativePosition;
             recordedRootRotation = tableRelativeRotation;
             recordedRootSpace = "table";
         }
 
-        sb.AppendFormat("\"rootSpace\":\"{0}\",", recordedRootSpace);
-        AppendPoseObject(sb, root.name, recordedRootPosition, recordedRootRotation);
+        if (recordWristTransforms)
+        {
+            sb.AppendFormat("\"rootSpace\":\"{0}\",", recordedRootSpace);
+            AppendPoseObject(sb, root.name, recordedRootPosition, recordedRootRotation);
+        }
+
+        if (recordFingerTipPositions)
+        {
+            AppendFingerTipsRelativeToWrist(sb, root);
+        }
         AppendCubeRecordingData(sb, hasRecordingTableOrigin, recordingTableOriginPose);
 
-        // Joint rotations
-        foreach (var j in jointObjects)
+        if (recordJointRotations)
         {
-            string jn = j.name;
-            if (!targetJoints.Contains(jn)) continue;
+            // Joint rotations
+            foreach (var j in jointObjects)
+            {
+                string jn = j.name;
+                if (!targetJoints.Contains(jn)) continue;
 
-            Quaternion q = j.transform.localRotation;
+                Quaternion q = GetRecordedJointRotation(jn, j.transform.localRotation);
 
-            sb.AppendFormat("\"{0}\":[{1},{2},{3},{4}],",
-                jn, q.x, q.y, q.z, q.w);
+                sb.AppendFormat("\"{0}\":[{1},{2},{3},{4}],",
+                    jn, q.x, q.y, q.z, q.w);
+            }
         }
 
         // Remove trailing comma (last char might be ,)
@@ -309,6 +400,108 @@ public class XRHandJointVisualizer : MonoBehaviour
 
         sb.Append("}");
         recordedLines.Add(sb.ToString());
+    }
+
+    private void UpdateStabilizedTrackingState(float deltaTime)
+    {
+        if (Hand == null)
+        {
+            return;
+        }
+
+        Transform root = Hand.transform;
+        if (!stabilizeRecordedHandData || deltaTime <= 0f)
+        {
+            stabilizedRootLocalPosition = root.localPosition;
+            stabilizedRootLocalRotation = root.localRotation;
+            hasStabilizedRootLocalPosition = true;
+            hasStabilizedRootLocalRotation = true;
+            stabilizedRootWorldPosition = root.position;
+            stabilizedRootWorldRotation = root.rotation;
+            hasStabilizedRootWorldPosition = true;
+            hasStabilizedRootWorldRotation = true;
+
+            if (recordJointRotations)
+            {
+                foreach (GameObject jointObject in jointObjects)
+                {
+                    string jointName = jointObject.name;
+                    if (!targetJoints.Contains(jointName))
+                    {
+                        continue;
+                    }
+
+                    filteredJointRotations[jointName] = new FilteredRotationState
+                    {
+                        initialized = true,
+                        rotation = jointObject.transform.localRotation,
+                        lastReliableTime = Time.time
+                    };
+                }
+            }
+            else
+            {
+                filteredJointRotations.Clear();
+            }
+
+            return;
+        }
+
+        stabilizedRootLocalPosition = DampVector(stabilizedRootLocalPosition, root.localPosition, rootPositionSmoothing, deltaTime, ref hasStabilizedRootLocalPosition);
+        stabilizedRootLocalRotation = DampQuaternion(stabilizedRootLocalRotation, root.localRotation, rootRotationSmoothing, deltaTime, ref hasStabilizedRootLocalRotation);
+        stabilizedRootWorldPosition = DampVector(stabilizedRootWorldPosition, root.position, rootPositionSmoothing, deltaTime, ref hasStabilizedRootWorldPosition);
+        stabilizedRootWorldRotation = DampQuaternion(stabilizedRootWorldRotation, root.rotation, rootRotationSmoothing, deltaTime, ref hasStabilizedRootWorldRotation);
+
+        if (!recordJointRotations)
+        {
+            filteredJointRotations.Clear();
+            return;
+        }
+
+        foreach (GameObject jointObject in jointObjects)
+        {
+            string jointName = jointObject.name;
+            if (!targetJoints.Contains(jointName))
+            {
+                continue;
+            }
+
+            Quaternion rawRotation = jointObject.transform.localRotation;
+            FilteredRotationState state;
+            if (!filteredJointRotations.TryGetValue(jointName, out state) || !state.initialized)
+            {
+                state = new FilteredRotationState
+                {
+                    initialized = true,
+                    rotation = rawRotation,
+                    lastReliableTime = Time.time
+                };
+                filteredJointRotations[jointName] = state;
+                continue;
+            }
+
+            float angleDelta = Quaternion.Angle(state.rotation, rawRotation);
+            float angularVelocity = deltaTime > 0f ? angleDelta / deltaTime : 0f;
+            bool potentialOcclusionSpike =
+                angleDelta >= occlusionSpikeAngleDegrees ||
+                angularVelocity >= occlusionAngularVelocityThreshold;
+
+            float blend = jointRotationSmoothing;
+            if (!potentialOcclusionSpike)
+            {
+                state.lastReliableTime = Time.time;
+            }
+            else
+            {
+                float timeSinceReliable = Time.time - state.lastReliableTime;
+                float recoveryFactor = Mathf.Clamp01(timeSinceReliable / Mathf.Max(0.0001f, occlusionHoldSeconds));
+                float occlusionBlend = Mathf.Lerp(occlusionBlendMultiplier, 1f, recoveryFactor);
+                blend *= occlusionBlend;
+            }
+
+            state.rotation = DampQuaternion(state.rotation, rawRotation, blend, deltaTime, ref state.initialized);
+            filteredJointRotations[jointName] = state;
+        }
     }
 
     private void AppendPoseObject(StringBuilder sb, string name, Vector3 position, Quaternion rotation)
@@ -360,6 +553,63 @@ public class XRHandJointVisualizer : MonoBehaviour
         }
 
         cubeTrackers = FindObjectsByType<ArucoCubeTracker>(FindObjectsSortMode.None);
+    }
+
+    private void CacheRecordedThumbTip()
+    {
+        recordedThumbTip = FindChildTransformByName(Hand != null ? Hand.transform : null, "XRHand_ThumbTip");
+        if (recordedThumbTip == null && Hand != null)
+        {
+            Debug.LogWarning("XRHand_ThumbTip was not found under the tracked hand. Thumb tip IK data will be omitted from recordings.");
+        }
+
+        recordedIndexTip = FindChildTransformByName(Hand != null ? Hand.transform : null, "XRHand_IndexTip");
+        if (recordedIndexTip == null && Hand != null)
+        {
+            Debug.LogWarning("XRHand_IndexTip was not found under the tracked hand. Index tip IK data will be omitted from recordings.");
+        }
+
+        recordedMiddleTip = FindChildTransformByName(Hand != null ? Hand.transform : null, "XRHand_MiddleTip");
+        if (recordedMiddleTip == null && Hand != null)
+        {
+            Debug.LogWarning("XRHand_MiddleTip was not found under the tracked hand. Middle tip IK data will be omitted from recordings.");
+        }
+
+        recordedRingTip = FindChildTransformByName(Hand != null ? Hand.transform : null, "XRHand_RingTip");
+        if (recordedRingTip == null && Hand != null)
+        {
+            Debug.LogWarning("XRHand_RingTip was not found under the tracked hand. Ring tip IK data will be omitted from recordings.");
+        }
+
+        recordedLittleTip = FindChildTransformByName(Hand != null ? Hand.transform : null, "XRHand_LittleTip");
+        if (recordedLittleTip == null && Hand != null)
+        {
+            Debug.LogWarning("XRHand_LittleTip was not found under the tracked hand. Little tip IK data will be omitted from recordings.");
+        }
+    }
+
+    private void AppendFingerTipsRelativeToWrist(StringBuilder sb, Transform root)
+    {
+        if (root == null)
+        {
+            return;
+        }
+
+        if (recordedThumbTip == null)
+        {
+            CacheRecordedThumbTip();
+        }
+
+        if (recordedThumbTip == null)
+        {
+            return;
+        }
+
+        AppendTipRelativeToWrist(sb, root, "thumbTipRelativeToWrist", recordedThumbTip);
+        AppendTipRelativeToWrist(sb, root, "indexTipRelativeToWrist", recordedIndexTip);
+        AppendTipRelativeToWrist(sb, root, "middleTipRelativeToWrist", recordedMiddleTip);
+        AppendTipRelativeToWrist(sb, root, "ringTipRelativeToWrist", recordedRingTip);
+        AppendTipRelativeToWrist(sb, root, "littleTipRelativeToWrist", recordedLittleTip);
     }
 
     private bool TryCaptureRecordingStartTableOrigin()
@@ -429,6 +679,117 @@ public class XRHandJointVisualizer : MonoBehaviour
 #endif
 
         return Application.persistentDataPath;
+    }
+
+    private void CaptureRecordingStartJointDistances()
+    {
+        recordingStartJointDistances.Clear();
+        recordingStartWristToFingerBaseMeasurements.Clear();
+
+        if (Hand == null)
+        {
+            return;
+        }
+
+        Transform[] handTransforms = Hand.GetComponentsInChildren<Transform>(true);
+        foreach (Transform joint in handTransforms)
+        {
+            Transform parent = joint.parent;
+            if (parent == null)
+            {
+                continue;
+            }
+
+            if (!parent.IsChildOf(Hand.transform) && parent != Hand.transform)
+            {
+                continue;
+            }
+
+            recordingStartJointDistances.Add(new JointDistanceRecord
+            {
+                fromJoint = parent.name,
+                toJoint = joint.name,
+                distanceMeters = joint.localPosition.magnitude
+            });
+        }
+
+        AppendWristToFingerBaseMeasurement("XRHand_ThumbMetacarpal");
+        AppendWristToFingerBaseMeasurement("XRHand_IndexProximal");
+        AppendWristToFingerBaseMeasurement("XRHand_MiddleProximal");
+        AppendWristToFingerBaseMeasurement("XRHand_RingProximal");
+        AppendWristToFingerBaseMeasurement("XRHand_LittleProximal");
+    }
+
+    private void AppendRecordingMetadataLine()
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.Append("{");
+        sb.Append("\"recordType\":\"metadata\",");
+        sb.Append("\"schemaVersion\":3,");
+        sb.AppendFormat("\"stabilizedRecording\":{0},", stabilizeRecordedHandData ? "true" : "false");
+        sb.AppendFormat("\"recordWristTransforms\":{0},", recordWristTransforms ? "true" : "false");
+        sb.AppendFormat("\"recordFingerTipPositions\":{0},", recordFingerTipPositions ? "true" : "false");
+        sb.AppendFormat("\"recordJointRotations\":{0},", recordJointRotations ? "true" : "false");
+        sb.Append("\"jointDistanceUnit\":\"meters\",");
+        sb.Append("\"jointDistances\":[");
+
+        for (int i = 0; i < recordingStartJointDistances.Count; i++)
+        {
+            JointDistanceRecord distanceRecord = recordingStartJointDistances[i];
+            sb.AppendFormat(
+                "{{\"from\":\"{0}\",\"to\":\"{1}\",\"distance\":{2}}}",
+                distanceRecord.fromJoint,
+                distanceRecord.toJoint,
+                distanceRecord.distanceMeters);
+
+            if (i < recordingStartJointDistances.Count - 1)
+            {
+                sb.Append(",");
+            }
+        }
+
+        sb.Append("],");
+        sb.Append("\"wristToFingerBaseMeasurements\":[");
+
+        for (int i = 0; i < recordingStartWristToFingerBaseMeasurements.Count; i++)
+        {
+            JointOffsetRecord measurement = recordingStartWristToFingerBaseMeasurements[i];
+            sb.AppendFormat(
+                "{{\"from\":\"{0}\",\"to\":\"{1}\",\"offset\":[{2},{3},{4}],\"distance\":{5}}}",
+                measurement.fromJoint,
+                measurement.toJoint,
+                measurement.offsetMeters.x,
+                measurement.offsetMeters.y,
+                measurement.offsetMeters.z,
+                measurement.distanceMeters);
+
+            if (i < recordingStartWristToFingerBaseMeasurements.Count - 1)
+            {
+                sb.Append(",");
+            }
+        }
+
+        sb.Append("]");
+        sb.Append("}");
+        recordedLines.Add(sb.ToString());
+    }
+
+    private void AppendWristToFingerBaseMeasurement(string fingerBaseJointName)
+    {
+        Transform fingerBase = FindChildTransformByName(Hand.transform, fingerBaseJointName);
+        if (fingerBase == null)
+        {
+            return;
+        }
+
+        Vector3 localOffset = fingerBase.localPosition;
+        recordingStartWristToFingerBaseMeasurements.Add(new JointOffsetRecord
+        {
+            fromJoint = Hand.transform.name,
+            toJoint = fingerBaseJointName,
+            offsetMeters = localOffset,
+            distanceMeters = localOffset.magnitude
+        });
     }
 
     private void UpdateRecordingToggle()
@@ -665,5 +1026,88 @@ public class XRHandJointVisualizer : MonoBehaviour
         {
             GetChildrenRecursive(child.gameObject);
         }
+    }
+
+    private Quaternion GetRecordedJointRotation(string jointName, Quaternion fallbackRotation)
+    {
+        if (!stabilizeRecordedHandData)
+        {
+            return fallbackRotation;
+        }
+
+        FilteredRotationState state;
+        if (filteredJointRotations.TryGetValue(jointName, out state) && state.initialized)
+        {
+            return state.rotation;
+        }
+
+        return fallbackRotation;
+    }
+
+    private static float GetExponentialBlend(float smoothing, float deltaTime)
+    {
+        if (smoothing <= 0f || deltaTime <= 0f)
+        {
+            return 1f;
+        }
+
+        return 1f - Mathf.Exp(-smoothing * deltaTime);
+    }
+
+    private static Vector3 DampVector(Vector3 current, Vector3 target, float smoothing, float deltaTime, ref bool initialized)
+    {
+        if (!initialized)
+        {
+            initialized = true;
+            return target;
+        }
+
+        return Vector3.Lerp(current, target, GetExponentialBlend(smoothing, deltaTime));
+    }
+
+    private static Quaternion DampQuaternion(Quaternion current, Quaternion target, float smoothing, float deltaTime, ref bool initialized)
+    {
+        if (!initialized)
+        {
+            initialized = true;
+            return target;
+        }
+
+        return Quaternion.Slerp(current, target, GetExponentialBlend(smoothing, deltaTime));
+    }
+
+    private static void AppendTipRelativeToWrist(StringBuilder sb, Transform root, string jsonFieldName, Transform tipTransform)
+    {
+        if (sb == null || root == null || tipTransform == null)
+        {
+            return;
+        }
+
+        Vector3 tipRelativeToWrist = root.InverseTransformPoint(tipTransform.position);
+        sb.AppendFormat(
+            "\"{0}\":[{1},{2},{3}],",
+            jsonFieldName,
+            tipRelativeToWrist.x,
+            tipRelativeToWrist.y,
+            tipRelativeToWrist.z);
+    }
+
+    private static Transform FindChildTransformByName(Transform root, string targetName)
+    {
+        if (root == null)
+        {
+            return null;
+        }
+
+        Transform[] transforms = root.GetComponentsInChildren<Transform>(true);
+        for (int i = 0; i < transforms.Length; i++)
+        {
+            if (transforms[i].name == targetName)
+            {
+                return transforms[i];
+            }
+        }
+
+        return null;
     }
 }

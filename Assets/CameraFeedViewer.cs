@@ -153,6 +153,11 @@ public class CameraFeedViewer : MonoBehaviour
     [Range(1, 6)] public int stackConfigurationConfirmationFrames = 2;
     [Range(1, 4)] public int stackConfigurationReleaseFrames = 1;
     [Range(4f, 30f)] public float stackHudUpdatesPerSecond = 12f;
+    public bool showFpsCounter = true;
+    [Min(0.05f)] public float fpsCounterUpdateIntervalSeconds = 0.2f;
+    [Min(0.1f)] public float fpsCounterTextScale = 0.35f;
+    public Vector2 fpsCounterLocalOffset = new Vector2(-0.14f, 0.06f);
+    [Min(0.25f)] public float fpsAverageWindowSeconds = 2f;
     public bool showPlacementTarget = true;
     [Min(0.05f)] public float placementTargetMinRadiusMeters = 0.12f;
     [Min(0.08f)] public float placementTargetMaxRadiusMeters = 0.22f;
@@ -191,6 +196,9 @@ public class CameraFeedViewer : MonoBehaviour
     int pendingStackSignatureHash;
     int pendingStackSignatureFrames;
     bool hasPendingStackSignature;
+    readonly Queue<float> fpsSampleDurations = new Queue<float>(256);
+    float fpsSampleDurationSum;
+    float lastFpsCounterUpdateTime = float.NegativeInfinity;
     PlacementTargetVisual placementTargetVisual;
     Vector2 placementTargetOffset;
     int placementTargetCubeId = -1;
@@ -200,6 +208,8 @@ public class CameraFeedViewer : MonoBehaviour
     Transform overlayRoot;
     Transform worldOverlayRoot;
     Transform stackHudRoot;
+    Transform fpsCounterRoot;
+    TextMesh fpsCounterText;
     Material lineMaterial;
     Material fillMaterial;
     Material axisXMaterial; // Add this
@@ -278,6 +288,7 @@ public class CameraFeedViewer : MonoBehaviour
 
         GameObject root = new GameObject("DetectedStacksHud");
         stackHudRoot = root.transform;
+        EnsureFpsCounterInfrastructure();
     }
 
     void DestroyStackHudVisuals()
@@ -311,6 +322,29 @@ public class CameraFeedViewer : MonoBehaviour
             Destroy(stackHudRoot.gameObject);
             stackHudRoot = null;
         }
+
+        fpsCounterRoot = null;
+        fpsCounterText = null;
+    }
+
+    void EnsureFpsCounterInfrastructure()
+    {
+        if (stackHudRoot == null || fpsCounterRoot != null)
+        {
+            return;
+        }
+
+        GameObject fpsObject = new GameObject("FpsCounter");
+        fpsCounterRoot = fpsObject.transform;
+        fpsCounterRoot.SetParent(stackHudRoot, false);
+
+        fpsCounterText = fpsObject.AddComponent<TextMesh>();
+        fpsCounterText.text = "FPS --";
+        fpsCounterText.fontSize = 64;
+        fpsCounterText.characterSize = 0.03f;
+        fpsCounterText.anchor = TextAnchor.UpperLeft;
+        fpsCounterText.alignment = TextAlignment.Left;
+        fpsCounterText.color = Color.white;
     }
 
     void EnsurePlacementTargetInfrastructure()
@@ -441,6 +475,7 @@ public class CameraFeedViewer : MonoBehaviour
             Mathf.Max(0.1f, stackHudDistance));
         stackHudRoot.localRotation = Quaternion.identity;
         stackHudRoot.localScale = Vector3.one;
+        UpdateFpsCounterVisual();
     }
 
     void UpdateStackHudVisuals()
@@ -1153,9 +1188,11 @@ public class CameraFeedViewer : MonoBehaviour
     void Start()
     {
         // These are serialized fields, so scene instances keep old values until explicitly changed.
-        // Force the feed orientation we want at runtime instead of relying on code defaults.
+        // Force the runtime configuration we want instead of relying on stale Inspector values.
         flipDisplayHorizontally = true;
         flipDisplayVertically = true;
+        updateCameraFeedTexture = false;
+        drawWorldMarkers = false;
 
         if (!Permission.HasUserAuthorizedPermission("horizonos.permission.HEADSET_CAMERA"))
         {
@@ -1163,8 +1200,6 @@ public class CameraFeedViewer : MonoBehaviour
         }
 
         arucoClass = new AndroidJavaClass("com.GeorgiaTech.aruco.ArucoBridge");
-        EnsureOverlayInfrastructure();
-        EnsureWorldOverlayInfrastructure();
         EnsureStackHudInfrastructure();
         RefreshCubeTrackers();
         EnsurePlacementTargetInfrastructure();
@@ -1359,11 +1394,6 @@ public class CameraFeedViewer : MonoBehaviour
             markerDetections.Clear();
         }
 
-        if (needsDetailedMarkerData && markerDetections.Count > 0 && debugPixels != null)
-        {
-            DrawMarkerOverlayIntoTexture(width, height);
-        }
-
         if (estimateMarkerPoses && TryGetProcessingIntrinsics(width, height, currentResolution, cameraIntrinsics, out Vector2 focalLength, out Vector2 principalPoint))
         {
             float[] markerPoseData = DetectMarkerPoses(grayBytes, width, height, focalLength.x, focalLength.y, principalPoint.x, principalPoint.y);
@@ -1372,6 +1402,11 @@ public class CameraFeedViewer : MonoBehaviour
         else
         {
             markerPoseDetections.Clear();
+        }
+
+        if (needsDetailedMarkerData && markerDetections.Count > 0 && debugPixels != null)
+        {
+            DrawMarkerOverlayIntoTexture(width, height);
         }
 
         if (debugTexture != null && debugPixels != null)
@@ -1828,6 +1863,72 @@ public class CameraFeedViewer : MonoBehaviour
             {
                 tableOriginTransform.position = tableOriginPose.Position;
             }
+        }
+    }
+
+    void UpdateFpsCounterVisual()
+    {
+        if (stackHudRoot == null)
+        {
+            return;
+        }
+
+        EnsureFpsCounterInfrastructure();
+        if (fpsCounterRoot == null || fpsCounterText == null)
+        {
+            return;
+        }
+
+        bool shouldShow = showStackHud && showFpsCounter && stackHudRoot.gameObject.activeInHierarchy;
+        if (fpsCounterRoot.gameObject.activeSelf != shouldShow)
+        {
+            fpsCounterRoot.gameObject.SetActive(shouldShow);
+        }
+
+        if (!shouldShow)
+        {
+            return;
+        }
+
+        fpsCounterRoot.localPosition = new Vector3(fpsCounterLocalOffset.x, fpsCounterLocalOffset.y, -0.02f);
+        fpsCounterRoot.localRotation = Quaternion.identity;
+        fpsCounterRoot.localScale = Vector3.one * Mathf.Clamp(fpsCounterTextScale, 0.1f, 0.35f);
+
+        float deltaTime = Time.unscaledDeltaTime;
+        if (deltaTime > 0f)
+        {
+            fpsSampleDurations.Enqueue(deltaTime);
+            fpsSampleDurationSum += deltaTime;
+
+            float targetWindow = Mathf.Max(0.25f, fpsAverageWindowSeconds);
+            while (fpsSampleDurationSum > targetWindow && fpsSampleDurations.Count > 1)
+            {
+                fpsSampleDurationSum -= fpsSampleDurations.Dequeue();
+            }
+        }
+
+        if ((Time.unscaledTime - lastFpsCounterUpdateTime) < Mathf.Max(0.05f, fpsCounterUpdateIntervalSeconds))
+        {
+            return;
+        }
+
+        lastFpsCounterUpdateTime = Time.unscaledTime;
+        float averageFps = fpsSampleDurationSum > 0f
+            ? fpsSampleDurations.Count / fpsSampleDurationSum
+            : 0f;
+        fpsCounterText.text = $"AVG FPS {averageFps:0.0}";
+
+        if (averageFps >= 70f)
+        {
+            fpsCounterText.color = new Color(0.45f, 1f, 0.45f, 1f);
+        }
+        else if (averageFps >= 50f)
+        {
+            fpsCounterText.color = new Color(1f, 0.9f, 0.3f, 1f);
+        }
+        else
+        {
+            fpsCounterText.color = new Color(1f, 0.45f, 0.45f, 1f);
         }
     }
 

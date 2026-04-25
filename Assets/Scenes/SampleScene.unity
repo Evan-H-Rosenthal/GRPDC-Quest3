@@ -423,7 +423,7 @@ MonoBehaviour:
   maxTrackingUpdatesPerSecond: 12
   tableCenterMarkerId: 0
   tablePoseSmoothing: 18
-  tablePoseHoldSeconds: 0.5
+  tablePoseHoldSeconds: 0.25
   tableMaxPositionJumpMeters: 0.04
   tableMaxRotationJumpDegrees: 15
   tableOutlierFramesBeforeSnap: 3
@@ -455,6 +455,11 @@ MonoBehaviour:
   stackConfigurationConfirmationFrames: 2
   stackConfigurationReleaseFrames: 1
   stackHudUpdatesPerSecond: 12
+  showFpsCounter: 1
+  fpsCounterUpdateIntervalSeconds: 0.2
+  fpsCounterTextScale: 0.012
+  fpsCounterLocalOffset: {x: -0.12, y: 0.04}
+  fpsAverageWindowSeconds: 2
   showPlacementTarget: 1
   placementTargetMinRadiusMeters: 0.12
   placementTargetMaxRadiusMeters: 0.22
@@ -1385,7 +1390,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: meta.xr.mrutilitykit::Meta.XR.PassthroughCameraAccess
   CameraPosition: 0
   RequestedResolution: {x: 1280, y: 960}
-  _maxFramerate: 60
+  _maxFramerate: 30
   TargetMaterial: {fileID: 0}
   _texturePropertyName: 
 --- !u!4 &719458532
@@ -2834,7 +2839,7 @@ MonoBehaviour:
   resetTrackerOnLoad: 0
   AllowRecenter: 1
   LateControllerUpdate: 1
-  LateLatching: 0
+  LateLatching: 1
   controllerDrivenHandPosesType: 0
   SimultaneousHandsAndControllersEnabled: 0
   _readOnlyWideMotionModeHandPosesEnabled: 0
@@ -3485,7 +3490,7 @@ MonoBehaviour:
   cubeLabel: Cube 1
   cubeMarkerId: 1
   cubeSizeMeters: 0.0762
-  poseHoldSeconds: 0.75
+  poseHoldSeconds: 0.4
   poseSmoothing: 12
   maxPositionJumpMeters: 0.08
   maxRotationJumpDegrees: 55
@@ -3507,8 +3512,8 @@ MonoBehaviour:
   singleMarkerMaxTrustedRotationDeltaDegrees: 20
   singleMarkerLargeRotationConfirmationFrames: 4
   singleMarkerRotationConfirmationToleranceDegrees: 10
-  stationaryPositionDeadbandMeters: 0.0025
-  stationaryRotationDeadbandDegrees: 2
+  stationaryPositionDeadbandMeters: 0.004
+  stationaryRotationDeadbandDegrees: 3
   createRuntimeVisual: 1
   cubeVisualTransform: {fileID: 0}
   cubeMaterial: {fileID: 2100000, guid: aefee4b39d9d5f943acec085dbeb009f, type: 2}
@@ -3562,7 +3567,7 @@ MonoBehaviour:
   cubeLabel: Cube 2
   cubeMarkerId: 2
   cubeSizeMeters: 0.0762
-  poseHoldSeconds: 0.75
+  poseHoldSeconds: 0.4
   poseSmoothing: 12
   maxPositionJumpMeters: 0.08
   maxRotationJumpDegrees: 55
@@ -3584,8 +3589,8 @@ MonoBehaviour:
   singleMarkerMaxTrustedRotationDeltaDegrees: 20
   singleMarkerLargeRotationConfirmationFrames: 4
   singleMarkerRotationConfirmationToleranceDegrees: 10
-  stationaryPositionDeadbandMeters: 0.0025
-  stationaryRotationDeadbandDegrees: 2
+  stationaryPositionDeadbandMeters: 0.004
+  stationaryRotationDeadbandDegrees: 3
   createRuntimeVisual: 1
   cubeVisualTransform: {fileID: 0}
   cubeMaterial: {fileID: 2100000, guid: 0d7898f27de359640a79c3567c0ed98f, type: 2}
@@ -3639,7 +3644,7 @@ MonoBehaviour:
   cubeLabel: Cube 3
   cubeMarkerId: 3
   cubeSizeMeters: 0.0762
-  poseHoldSeconds: 0.75
+  poseHoldSeconds: 0.4
   poseSmoothing: 12
   maxPositionJumpMeters: 0.08
   maxRotationJumpDegrees: 55
@@ -3661,8 +3666,8 @@ MonoBehaviour:
   singleMarkerMaxTrustedRotationDeltaDegrees: 20
   singleMarkerLargeRotationConfirmationFrames: 4
   singleMarkerRotationConfirmationToleranceDegrees: 10
-  stationaryPositionDeadbandMeters: 0.0025
-  stationaryRotationDeadbandDegrees: 2
+  stationaryPositionDeadbandMeters: 0.004
+  stationaryRotationDeadbandDegrees: 3
   createRuntimeVisual: 1
   cubeVisualTransform: {fileID: 0}
   cubeMaterial: {fileID: 2100000, guid: a5433ad4e91a59646b16612ca3d2b5bf, type: 2}
@@ -3716,7 +3721,7 @@ MonoBehaviour:
   cubeLabel: Cube 4
   cubeMarkerId: 4
   cubeSizeMeters: 0.0762
-  poseHoldSeconds: 0.75
+  poseHoldSeconds: 0.4
   poseSmoothing: 12
   maxPositionJumpMeters: 0.08
   maxRotationJumpDegrees: 55
@@ -3738,8 +3743,8 @@ MonoBehaviour:
   singleMarkerMaxTrustedRotationDeltaDegrees: 20
   singleMarkerLargeRotationConfirmationFrames: 4
   singleMarkerRotationConfirmationToleranceDegrees: 10
-  stationaryPositionDeadbandMeters: 0.0025
-  stationaryRotationDeadbandDegrees: 2
+  stationaryPositionDeadbandMeters: 0.004
+  stationaryRotationDeadbandDegrees: 3
   createRuntimeVisual: 1
   cubeVisualTransform: {fileID: 0}
   cubeMaterial: {fileID: 2100000, guid: 454500733f43e9543bccad873ad59a1e, type: 2}
