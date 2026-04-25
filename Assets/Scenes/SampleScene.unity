@@ -421,6 +421,9 @@ MonoBehaviour:
   lostMarkerProcessingDownscale: 2
   processEveryNthFrame: 1
   maxTrackingUpdatesPerSecond: 12
+  enableMarkerTrackingPipeline: 1
+  pipelineDisabledTestCubeDistanceMeters: 0.6
+  pipelineDisabledTestCubeSizeMeters: 0.12
   tableCenterMarkerId: 0
   tablePoseSmoothing: 18
   tablePoseHoldSeconds: 0.25
@@ -469,6 +472,11 @@ MonoBehaviour:
   placementTargetIndicatorHeightMeters: 0.12
   placementTargetIndicatorScaleMeters: 0.045
   placementTargetMatchRadiusMeters: 0.06
+  placementTaskPreviewLocalOffset: {x: 0.11, y: 0.045, z: 0}
+  placementTaskPreviewCubeSizeMeters: 0.03
+  placementTaskPreviewCubeGapMeters: 0.008
+  placementTaskPreviewStatusOffsetMeters: 0.04
+  placementTaskPreviewStatusScaleMeters: 0.02
 --- !u!1 &256051031
 GameObject:
   m_ObjectHideFlags: 0
@@ -1249,6 +1257,7 @@ MonoBehaviour:
   instructionalText: {fileID: 653101501}
   leftButton: {fileID: 1589684940}
   rightButton: {fileID: 2101000104}
+  cameraFeedViewer: {fileID: 0}
 --- !u!1 &653101499
 GameObject:
   m_ObjectHideFlags: 0
@@ -3518,6 +3527,9 @@ MonoBehaviour:
   cubeVisualTransform: {fileID: 0}
   cubeMaterial: {fileID: 2100000, guid: aefee4b39d9d5f943acec085dbeb009f, type: 2}
   cubeColor: {r: 1, g: 0.15, b: 0.15, a: 1}
+  wireframeLineWidthMeters: 0.004
+  hideOccludedWireframeEdges: 1
+  wireframeOccluderInsetMeters: 0.001
   showLabel: 0
 --- !u!1 &1999100010
 GameObject:
@@ -3595,6 +3607,9 @@ MonoBehaviour:
   cubeVisualTransform: {fileID: 0}
   cubeMaterial: {fileID: 2100000, guid: 0d7898f27de359640a79c3567c0ed98f, type: 2}
   cubeColor: {r: 0.15, g: 1, b: 0.15, a: 1}
+  wireframeLineWidthMeters: 0.004
+  hideOccludedWireframeEdges: 1
+  wireframeOccluderInsetMeters: 0.001
   showLabel: 0
 --- !u!1 &1999100020
 GameObject:
@@ -3672,6 +3687,9 @@ MonoBehaviour:
   cubeVisualTransform: {fileID: 0}
   cubeMaterial: {fileID: 2100000, guid: a5433ad4e91a59646b16612ca3d2b5bf, type: 2}
   cubeColor: {r: 0.15, g: 0.4, b: 1, a: 1}
+  wireframeLineWidthMeters: 0.004
+  hideOccludedWireframeEdges: 1
+  wireframeOccluderInsetMeters: 0.001
   showLabel: 0
 --- !u!1 &1999100030
 GameObject:
@@ -3749,6 +3767,9 @@ MonoBehaviour:
   cubeVisualTransform: {fileID: 0}
   cubeMaterial: {fileID: 2100000, guid: 454500733f43e9543bccad873ad59a1e, type: 2}
   cubeColor: {r: 1, g: 0.9, b: 0.15, a: 1}
+  wireframeLineWidthMeters: 0.004
+  hideOccludedWireframeEdges: 1
+  wireframeOccluderInsetMeters: 0.001
   showLabel: 0
 --- !u!1 &2012355070
 GameObject:

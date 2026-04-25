@@ -82,6 +82,9 @@ public class ArucoCubeTracker : MonoBehaviour
     public Transform cubeVisualTransform;
     public Material cubeMaterial;
     public Color cubeColor = Color.red;
+    [Min(0.0005f)] public float wireframeLineWidthMeters = 0.004f;
+    public bool hideOccludedWireframeEdges = true;
+    [Min(0f)] public float wireframeOccluderInsetMeters = 0.001f;
     public bool showLabel = false;
 
     readonly List<Pose> markerPoseBuffer = new List<Pose>(6);
@@ -90,6 +93,9 @@ public class ArucoCubeTracker : MonoBehaviour
 
     Transform runtimeVisualRoot;
     TextMeshPro runtimeLabel;
+    readonly List<LineRenderer> runtimeWireframeEdges = new List<LineRenderer>(12);
+    Material runtimeWireframeMaterial;
+    Material runtimeDepthOccluderMaterial;
     int lastResolvedFaceIndex = -1;
     int pendingSingleMarkerFaceIndex = -1;
     int pendingSingleMarkerFaceFrames;
@@ -638,6 +644,19 @@ public class ArucoCubeTracker : MonoBehaviour
         }
     }
 
+    void OnDestroy()
+    {
+        if (runtimeWireframeMaterial != null)
+        {
+            Destroy(runtimeWireframeMaterial);
+        }
+
+        if (runtimeDepthOccluderMaterial != null)
+        {
+            Destroy(runtimeDepthOccluderMaterial);
+        }
+    }
+
     Transform GetOrCreateVisualTransform()
     {
         if (cubeVisualTransform != null)
@@ -658,39 +677,7 @@ public class ArucoCubeTracker : MonoBehaviour
         GameObject root = new GameObject($"{cubeLabel}_Tracked");
         runtimeVisualRoot = root.transform;
 
-        GameObject cubeBody = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        cubeBody.name = "Visual";
-        cubeBody.transform.SetParent(runtimeVisualRoot, false);
-        cubeBody.transform.localScale = Vector3.one * cubeSizeMeters;
-
-        Collider cubeCollider = cubeBody.GetComponent<Collider>();
-        if (cubeCollider != null)
-        {
-            cubeCollider.enabled = false;
-        }
-
-        Renderer cubeRenderer = cubeBody.GetComponent<Renderer>();
-        if (cubeMaterial != null)
-        {
-            cubeRenderer.sharedMaterial = cubeMaterial;
-        }
-        else
-        {
-            Shader shader = Shader.Find("Universal Render Pipeline/Lit");
-            if (shader == null)
-            {
-                shader = Shader.Find("Standard");
-            }
-
-            Material material = new Material(shader);
-            material.color = cubeColor;
-            if (material.HasProperty("_BaseColor"))
-            {
-                material.SetColor("_BaseColor", cubeColor);
-            }
-
-            cubeRenderer.material = material;
-        }
+        CreateWireframeVisual(runtimeVisualRoot);
 
         if (showLabel)
         {
@@ -707,5 +694,161 @@ public class ArucoCubeTracker : MonoBehaviour
         root.SetActive(false);
         cubeVisualTransform = runtimeVisualRoot;
         return cubeVisualTransform;
+    }
+
+    void CreateWireframeVisual(Transform parent)
+    {
+        runtimeWireframeEdges.Clear();
+
+        Color visualColor = GetRuntimeVisualColor();
+        runtimeWireframeMaterial = CreateWireframeMaterial(visualColor);
+
+        if (hideOccludedWireframeEdges)
+        {
+            CreateDepthOccluder(parent);
+        }
+
+        Vector3[] corners = BuildCubeCorners(cubeSizeMeters);
+        int[,] edgeIndices =
+        {
+            { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 0 },
+            { 4, 5 }, { 5, 6 }, { 6, 7 }, { 7, 4 },
+            { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 }
+        };
+
+        float lineWidth = Mathf.Clamp(wireframeLineWidthMeters, 0.0005f, cubeSizeMeters * 0.2f);
+        for (int edgeIndex = 0; edgeIndex < edgeIndices.GetLength(0); edgeIndex++)
+        {
+            GameObject edgeObject = new GameObject($"Edge_{edgeIndex + 1}");
+            edgeObject.transform.SetParent(parent, false);
+
+            LineRenderer edge = edgeObject.AddComponent<LineRenderer>();
+            edge.sharedMaterial = runtimeWireframeMaterial;
+            edge.useWorldSpace = false;
+            edge.loop = false;
+            edge.positionCount = 2;
+            edge.widthMultiplier = lineWidth;
+            edge.numCapVertices = 4;
+            edge.numCornerVertices = 4;
+            edge.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            edge.receiveShadows = false;
+            edge.textureMode = LineTextureMode.Stretch;
+            edge.alignment = LineAlignment.View;
+            edge.startColor = visualColor;
+            edge.endColor = visualColor;
+            edge.SetPosition(0, corners[edgeIndices[edgeIndex, 0]]);
+            edge.SetPosition(1, corners[edgeIndices[edgeIndex, 1]]);
+
+            runtimeWireframeEdges.Add(edge);
+        }
+    }
+
+    Color GetRuntimeVisualColor()
+    {
+        if (cubeMaterial == null)
+        {
+            return cubeColor;
+        }
+
+        if (cubeMaterial.HasProperty("_BaseColor"))
+        {
+            return cubeMaterial.GetColor("_BaseColor");
+        }
+
+        if (cubeMaterial.HasProperty("_Color"))
+        {
+            return cubeMaterial.color;
+        }
+
+        return cubeColor;
+    }
+
+    Material CreateWireframeMaterial(Color color)
+    {
+        Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
+        if (shader == null)
+        {
+            shader = Shader.Find("Sprites/Default");
+        }
+
+        if (shader == null)
+        {
+            shader = Shader.Find("Unlit/Color");
+        }
+
+        Material material = new Material(shader);
+        material.color = color;
+
+        if (material.HasProperty("_BaseColor"))
+        {
+            material.SetColor("_BaseColor", color);
+        }
+
+        if (material.HasProperty("_Color"))
+        {
+            material.SetColor("_Color", color);
+        }
+
+        material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+
+        return material;
+    }
+
+    void CreateDepthOccluder(Transform parent)
+    {
+        GameObject occluderObject = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        occluderObject.name = "DepthOccluder";
+        occluderObject.transform.SetParent(parent, false);
+
+        float occluderSize = Mathf.Max(0.001f, cubeSizeMeters - Mathf.Max(0f, wireframeOccluderInsetMeters));
+        occluderObject.transform.localScale = Vector3.one * occluderSize;
+
+        Collider occluderCollider = occluderObject.GetComponent<Collider>();
+        if (occluderCollider != null)
+        {
+            occluderCollider.enabled = false;
+        }
+
+        Renderer occluderRenderer = occluderObject.GetComponent<Renderer>();
+        runtimeDepthOccluderMaterial = CreateDepthOccluderMaterial();
+        occluderRenderer.sharedMaterial = runtimeDepthOccluderMaterial;
+        occluderRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        occluderRenderer.receiveShadows = false;
+    }
+
+    Material CreateDepthOccluderMaterial()
+    {
+        Shader shader = Resources.Load<Shader>("Shaders/WireframeDepthOccluder");
+        if (shader == null)
+        {
+            shader = Shader.Find("Hidden/Quest3/WireframeDepthOccluder");
+        }
+
+        if (shader == null)
+        {
+            Debug.LogWarning("Could not find wireframe depth occluder shader. Occluded wireframe edges will remain visible.");
+            Shader fallbackShader = Shader.Find("Standard");
+            Material fallbackMaterial = new Material(fallbackShader);
+            fallbackMaterial.color = new Color(0f, 0f, 0f, 0f);
+            return fallbackMaterial;
+        }
+
+        return new Material(shader);
+    }
+
+    Vector3[] BuildCubeCorners(float cubeSize)
+    {
+        float halfSize = cubeSize * 0.5f;
+        return new[]
+        {
+            new Vector3(-halfSize, -halfSize, -halfSize),
+            new Vector3(halfSize, -halfSize, -halfSize),
+            new Vector3(halfSize, halfSize, -halfSize),
+            new Vector3(-halfSize, halfSize, -halfSize),
+            new Vector3(-halfSize, -halfSize, halfSize),
+            new Vector3(halfSize, -halfSize, halfSize),
+            new Vector3(halfSize, halfSize, halfSize),
+            new Vector3(-halfSize, halfSize, halfSize)
+        };
     }
 }

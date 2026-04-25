@@ -9,6 +9,7 @@ public class InstructionFlowController : MonoBehaviour
     [SerializeField] private Text instructionalText;
     [SerializeField] private CanvasPokeButtonFeedback leftButton;
     [SerializeField] private CanvasPokeButtonFeedback rightButton;
+    [SerializeField] private CameraFeedViewer cameraFeedViewer;
 
     private const int IdlePageIndex = 0;
     private const int ReadyToStartPageIndex = 5;
@@ -53,6 +54,11 @@ public class InstructionFlowController : MonoBehaviour
 
     private void OnEnable()
     {
+        if (cameraFeedViewer == null)
+        {
+            cameraFeedViewer = FindFirstObjectByType<CameraFeedViewer>();
+        }
+
         if (leftButton != null)
         {
             leftButton.Clicked += HandleLeftButtonClicked;
@@ -164,6 +170,11 @@ public class InstructionFlowController : MonoBehaviour
         }
 
         _countdownCoroutine = null;
+
+        if (cameraFeedViewer != null)
+        {
+            cameraFeedViewer.BeginStackingTask();
+        }
 
         if (canvasRoot != null)
         {
