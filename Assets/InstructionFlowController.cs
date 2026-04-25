@@ -51,6 +51,12 @@ public class InstructionFlowController : MonoBehaviour
 
     private int _currentPageIndex;
     private Coroutine _countdownCoroutine;
+    private Canvas _canvas;
+    private GraphicRaycaster _graphicRaycaster;
+    private Behaviour[] _overlayCanvasBehaviours;
+    private Transform _canvasTransform;
+    private Vector3 _originalCanvasLocalPosition;
+    private bool _hasOriginalCanvasLocalPosition;
 
     private void OnEnable()
     {
@@ -58,6 +64,8 @@ public class InstructionFlowController : MonoBehaviour
         {
             cameraFeedViewer = FindFirstObjectByType<CameraFeedViewer>();
         }
+
+        CacheCanvasComponents();
 
         if (leftButton != null)
         {
@@ -69,7 +77,13 @@ public class InstructionFlowController : MonoBehaviour
             rightButton.Clicked += HandleRightButtonClicked;
         }
 
+        if (cameraFeedViewer != null)
+        {
+            cameraFeedViewer.StackingTaskCompleted += HandleStackingTaskCompleted;
+        }
+
         _currentPageIndex = IdlePageIndex;
+        SetCanvasVisible(true);
         ShowPage(_currentPageIndex);
     }
 
@@ -83,6 +97,11 @@ public class InstructionFlowController : MonoBehaviour
         if (rightButton != null)
         {
             rightButton.Clicked -= HandleRightButtonClicked;
+        }
+
+        if (cameraFeedViewer != null)
+        {
+            cameraFeedViewer.StackingTaskCompleted -= HandleStackingTaskCompleted;
         }
 
         if (_countdownCoroutine != null)
@@ -176,13 +195,115 @@ public class InstructionFlowController : MonoBehaviour
             cameraFeedViewer.BeginStackingTask();
         }
 
-        if (canvasRoot != null)
+        SetCanvasVisible(false);
+    }
+
+    private void HandleStackingTaskCompleted()
+    {
+        SetCanvasVisible(true);
+
+        if (headerText != null)
         {
-            canvasRoot.SetActive(false);
+            headerText.text = "Task 1 Complete!";
         }
-        else
+
+        if (instructionalText != null)
         {
-            gameObject.SetActive(false);
+            instructionalText.text = "You completed the task!";
+        }
+
+        if (leftButton != null)
+        {
+            leftButton.gameObject.SetActive(false);
+        }
+
+        if (rightButton != null)
+        {
+            rightButton.gameObject.SetActive(true);
+            rightButton.SetIdleText("Continue");
+            rightButton.SetPressedText("Continue");
+        }
+    }
+
+    private void SetCanvasVisible(bool isVisible)
+    {
+        CacheCanvasComponents();
+
+        if (_canvasTransform != null && _hasOriginalCanvasLocalPosition)
+        {
+            _canvasTransform.localPosition = isVisible
+                ? _originalCanvasLocalPosition
+                : _originalCanvasLocalPosition + (Vector3.up * 1000000f);
+        }
+
+        if (_canvas != null)
+        {
+            _canvas.enabled = isVisible;
+        }
+
+        if (_graphicRaycaster != null)
+        {
+            _graphicRaycaster.enabled = isVisible;
+        }
+
+        if (_overlayCanvasBehaviours != null)
+        {
+            for (int i = 0; i < _overlayCanvasBehaviours.Length; i++)
+            {
+                if (_overlayCanvasBehaviours[i] != null)
+                {
+                    _overlayCanvasBehaviours[i].enabled = isVisible;
+                }
+            }
+        }
+    }
+
+    private void CacheCanvasComponents()
+    {
+        GameObject root = canvasRoot != null ? canvasRoot : gameObject;
+
+        if (_canvasTransform == null)
+        {
+            _canvasTransform = root.transform;
+        }
+
+        if (!_hasOriginalCanvasLocalPosition && _canvasTransform != null)
+        {
+            _originalCanvasLocalPosition = _canvasTransform.localPosition;
+            _hasOriginalCanvasLocalPosition = true;
+        }
+
+        if (_canvas == null)
+        {
+            _canvas = root.GetComponent<Canvas>();
+        }
+
+        if (_graphicRaycaster == null)
+        {
+            _graphicRaycaster = root.GetComponent<GraphicRaycaster>();
+        }
+
+        if (_overlayCanvasBehaviours == null)
+        {
+            Behaviour[] behaviours = root.GetComponents<Behaviour>();
+            int overlayCount = 0;
+            for (int i = 0; i < behaviours.Length; i++)
+            {
+                if (behaviours[i] != null && behaviours[i].GetType().Name.Contains("OverlayCanvas"))
+                {
+                    overlayCount++;
+                }
+            }
+
+            _overlayCanvasBehaviours = new Behaviour[overlayCount];
+            int overlayIndex = 0;
+            for (int i = 0; i < behaviours.Length; i++)
+            {
+                if (behaviours[i] != null && behaviours[i].GetType().Name.Contains("OverlayCanvas"))
+                {
+                    _overlayCanvasBehaviours[overlayIndex++] = behaviours[i];
+                }
+            }
         }
     }
 

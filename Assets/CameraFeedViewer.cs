@@ -251,6 +251,7 @@ public class CameraFeedViewer : MonoBehaviour
     Color placementTargetCubeColor = Color.white;
     bool hasPlacementTarget;
     bool isPlacementTaskActive;
+    bool hasCompletedPlacementTask;
     readonly List<PlacementTaskRequirement> placementTaskRequirements = new List<PlacementTaskRequirement>(3);
     GameObject pipelineDisabledTestCube;
     Material pipelineDisabledTestCubeMaterial;
@@ -270,6 +271,8 @@ public class CameraFeedViewer : MonoBehaviour
     static readonly Color AxisYColor = new Color(0.25f, 1f, 0.25f, 1f);
     static readonly Color AxisZColor = new Color(0.25f, 0.55f, 1f, 1f);
 
+    public event Action StackingTaskCompleted;
+
     public bool TryGetTableOriginPose(out Pose pose)
     {
         pose = default;
@@ -286,6 +289,7 @@ public class CameraFeedViewer : MonoBehaviour
 
     public void BeginStackingTask()
     {
+        hasCompletedPlacementTask = false;
         RefreshCubeTrackersIfNeeded();
 
         if (!TryGeneratePlacementTaskRequirements())
@@ -1166,6 +1170,7 @@ public class CameraFeedViewer : MonoBehaviour
         placementTargetVisual.TaskPreviewRoot.localScale = Vector3.one;
 
         DetectedStack matchingStack = FindDetectedStackNearPlacementTarget(targetWorldPosition);
+        bool isTaskComplete = IsPlacementTaskComplete(matchingStack);
 
         float cubeSize = Mathf.Max(0.01f, placementTaskPreviewCubeSizeMeters);
         float cubeDepth = cubeSize;
@@ -1199,6 +1204,32 @@ public class CameraFeedViewer : MonoBehaviour
             placementTargetVisual.PreviewStatusRoots[i].localScale = Vector3.one;
             UpdatePreviewStatusSymbol(i, isCorrect);
         }
+
+        if (isTaskComplete && !hasCompletedPlacementTask)
+        {
+            hasCompletedPlacementTask = true;
+            isPlacementTaskActive = false;
+            hasPlacementTarget = false;
+            StackingTaskCompleted?.Invoke();
+        }
+    }
+
+    bool IsPlacementTaskComplete(DetectedStack matchingStack)
+    {
+        if (matchingStack == null || matchingStack.Cubes.Count < placementTaskRequirements.Count)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < placementTaskRequirements.Count; i++)
+        {
+            if (matchingStack.Cubes[i].CubeId != placementTaskRequirements[i].CubeId)
+            {
+                return false;
+            }
+        }
+
+        return placementTaskRequirements.Count > 0;
     }
 
     DetectedStack FindDetectedStackNearPlacementTarget(Vector3 targetWorldPosition)
