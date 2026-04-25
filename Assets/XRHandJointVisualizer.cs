@@ -256,6 +256,28 @@ public class XRHandJointVisualizer : MonoBehaviour
 
     public bool IsRecording => isRecording;
 
+    public bool StartRecordingIfNeeded()
+    {
+        if (isRecording)
+        {
+            return true;
+        }
+
+        StartRecording();
+        return isRecording;
+    }
+
+    public bool StopRecordingIfNeeded()
+    {
+        if (!isRecording)
+        {
+            return true;
+        }
+
+        StopRecording();
+        return !isRecording;
+    }
+
     public void ToggleRecording()
     {
         if (!isRecording)

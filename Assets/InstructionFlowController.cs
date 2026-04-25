@@ -10,6 +10,7 @@ public class InstructionFlowController : MonoBehaviour
     [SerializeField] private CanvasPokeButtonFeedback leftButton;
     [SerializeField] private CanvasPokeButtonFeedback rightButton;
     [SerializeField] private CameraFeedViewer cameraFeedViewer;
+    [SerializeField] private XRHandJointVisualizer recorder;
 
     private const int IdlePageIndex = 0;
     private const int ReadyToStartPageIndex = 5;
@@ -63,6 +64,11 @@ public class InstructionFlowController : MonoBehaviour
         if (cameraFeedViewer == null)
         {
             cameraFeedViewer = FindFirstObjectByType<CameraFeedViewer>();
+        }
+
+        if (recorder == null)
+        {
+            recorder = FindFirstObjectByType<XRHandJointVisualizer>();
         }
 
         CacheCanvasComponents();
@@ -195,11 +201,21 @@ public class InstructionFlowController : MonoBehaviour
             cameraFeedViewer.BeginStackingTask();
         }
 
+        if (recorder != null)
+        {
+            recorder.StartRecordingIfNeeded();
+        }
+
         SetCanvasVisible(false);
     }
 
     private void HandleStackingTaskCompleted()
     {
+        if (recorder != null)
+        {
+            recorder.StopRecordingIfNeeded();
+        }
+
         SetCanvasVisible(true);
 
         if (headerText != null)
