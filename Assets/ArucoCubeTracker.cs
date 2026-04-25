@@ -56,6 +56,12 @@ public class ArucoCubeTracker : MonoBehaviour
     [Min(0.001f)] public float cubeSizeMeters = 0.0762f;
     [Min(0f)] public float poseHoldSeconds = 0.75f;
     [Range(0f, 30f)] public float poseSmoothing = 12f;
+    public bool useAdaptivePoseSmoothing = true;
+    [Range(0f, 30f)] public float stationaryPoseSmoothing = 7f;
+    [Range(0f, 30f)] public float movingPoseSmoothing = 20f;
+    [Min(0.001f)] public float adaptivePositionRangeMeters = 0.035f;
+    [Range(1f, 90f)] public float adaptiveRotationRangeDegrees = 20f;
+    [Range(0.1f, 1f)] public float singleMarkerResponsivenessMultiplier = 0.8f;
     [Min(0f)] public float maxPositionJumpMeters = 0.08f;
     [Range(0f, 180f)] public float maxRotationJumpDegrees = 55f;
     [Range(1, 5)] public int outlierFramesBeforeSnap = 2;
@@ -573,14 +579,15 @@ public class ArucoCubeTracker : MonoBehaviour
             return;
         }
 
-        if (poseSmoothing <= 0f)
+        float effectiveSmoothing = GetEffectivePoseSmoothing(positionDelta, rotationDelta, visibleMarkerCount);
+        if (effectiveSmoothing <= 0f)
         {
             trackedPose.Position = worldPosition;
             trackedPose.Rotation = worldRotation;
         }
         else
         {
-            float blend = 1f - Mathf.Exp(-poseSmoothing * Time.deltaTime);
+            float blend = 1f - Mathf.Exp(-effectiveSmoothing * Time.deltaTime);
             Vector3 blendedPosition = Vector3.Lerp(trackedPose.Position, worldPosition, blend);
             Quaternion blendedRotation = Quaternion.Slerp(trackedPose.Rotation, worldRotation, blend);
 
@@ -607,6 +614,31 @@ public class ArucoCubeTracker : MonoBehaviour
         trackedPose.LastSeenTime = Time.time;
         trackedPose.IsTracked = true;
         trackedPose.IsVisible = true;
+    }
+
+    float GetEffectivePoseSmoothing(float positionDelta, float rotationDelta, int visibleMarkerCount)
+    {
+        if (!useAdaptivePoseSmoothing)
+        {
+            return poseSmoothing;
+        }
+
+        float positionMotion = adaptivePositionRangeMeters > 0f
+            ? positionDelta / adaptivePositionRangeMeters
+            : 1f;
+        float rotationMotion = adaptiveRotationRangeDegrees > 0f
+            ? rotationDelta / adaptiveRotationRangeDegrees
+            : 1f;
+        float motion = Mathf.Clamp01(Mathf.Max(positionMotion, rotationMotion));
+        motion = Mathf.SmoothStep(0f, 1f, motion);
+
+        float smoothing = Mathf.Lerp(stationaryPoseSmoothing, movingPoseSmoothing, motion);
+        if (visibleMarkerCount <= 1)
+        {
+            smoothing *= singleMarkerResponsivenessMultiplier;
+        }
+
+        return Mathf.Max(0f, smoothing);
     }
 
     void UpdateVisual()
