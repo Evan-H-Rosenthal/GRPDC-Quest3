@@ -1,9 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Threading;
+using System.Threading.Tasks;
 using Meta.XR;
 using UnityEngine;
 using UnityEngine.Android;
 using UnityEngine.Rendering;
+using Debug = UnityEngine.Debug;
 
 public class CameraFeedViewer : MonoBehaviour
 {
@@ -115,6 +119,19 @@ public class CameraFeedViewer : MonoBehaviour
         public float CubeSize;
     }
 
+    class TrackingPipelineResult
+    {
+        public int Width;
+        public int Height;
+        public Pose CameraPose;
+        public byte[] GrayBytes;
+        public float[] MarkerData;
+        public float[] MarkerPoseData;
+        public bool NeedsDebugTexture;
+        public bool NeedsDetailedMarkerData;
+        public double ProcessingMilliseconds;
+    }
+
     public PassthroughCameraAccess cameraAccess;
     public Renderer targetRenderer;
     public MarkerOverlayMode overlayMode = MarkerOverlayMode.WireframePlane;
@@ -194,8 +211,15 @@ public class CameraFeedViewer : MonoBehaviour
     AndroidJavaClass arucoClass;
     bool isProcessing;
     float lastTrackingRequestTime = float.NegativeInfinity;
+    float trackingCooldownUntilTime = float.NegativeInfinity;
     byte[] grayBytes;
+    byte[] readbackBytes;
     Color32[] debugPixels;
+    readonly object trackingResultLock = new object();
+    TrackingPipelineResult pendingTrackingResult;
+    bool hasPendingTrackingResult;
+    int trackingWorkerRunning;
+    int consecutiveSlowTrackingFrames;
     readonly List<MarkerDetection> markerDetections = new List<MarkerDetection>();
     readonly List<MarkerPoseDetection> markerPoseDetections = new List<MarkerPoseDetection>();
     readonly Dictionary<int, MarkerVisual> markerVisuals = new Dictionary<int, MarkerVisual>();
@@ -1608,6 +1632,7 @@ public class CameraFeedViewer : MonoBehaviour
 
     void Update()
     {
+        ApplyPendingTrackingResultIfAvailable();
         UpdatePipelineDisabledDiagnosticVisual();
 
         if (!enableMarkerTrackingPipeline)
@@ -1616,7 +1641,12 @@ public class CameraFeedViewer : MonoBehaviour
             return;
         }
 
-        if (isProcessing || cameraAccess == null)
+        if (isProcessing || Volatile.Read(ref trackingWorkerRunning) != 0 || cameraAccess == null)
+        {
+            return;
+        }
+
+        if (Time.unscaledTime < trackingCooldownUntilTime)
         {
             return;
         }
@@ -1681,93 +1711,171 @@ public class CameraFeedViewer : MonoBehaviour
             return;
         }
 
-        lastProcessedCameraPose = cameraPose;
-        hasLastProcessedCameraPose = true;
-
         var rawData = request.GetData<byte>();
+        int byteCount = rawData.Length;
+        if (readbackBytes == null || readbackBytes.Length != byteCount)
+        {
+            readbackBytes = new byte[byteCount];
+        }
+
+        rawData.CopyTo(readbackBytes);
 
         bool needsDebugTexture = updateCameraFeedTexture && targetRenderer != null;
+        bool needsDetailedMarkerData = drawDebugOverlay && needsDebugTexture;
+        Vector2 focalLength = default;
+        Vector2 principalPoint = default;
+        bool shouldEstimateMarkerPoses = estimateMarkerPoses &&
+            TryGetProcessingIntrinsics(width, height, currentResolution, cameraIntrinsics, out focalLength, out principalPoint);
 
-        if (grayBytes == null || grayBytes.Length != width * height)
+        byte[] frameBytes = readbackBytes;
+        Interlocked.Exchange(ref trackingWorkerRunning, 1);
+
+        Task.Run(() =>
         {
-            grayBytes = new byte[width * height];
+            ProcessTrackingFrameOnWorker(
+                frameBytes,
+                width,
+                height,
+                cameraPose,
+                needsDebugTexture,
+                needsDetailedMarkerData,
+                shouldEstimateMarkerPoses,
+                focalLength,
+                principalPoint);
+        });
+    }
 
-            if (needsDebugTexture)
-            {
-                debugPixels = new Color32[width * height];
-            }
-            else
-            {
-                debugPixels = null;
-            }
+    void ProcessTrackingFrameOnWorker(byte[] rgbaBytes, int width, int height, Pose cameraPose, bool needsDebugTexture, bool needsDetailedMarkerData, bool shouldEstimateMarkerPoses, Vector2 focalLength, Vector2 principalPoint)
+    {
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        byte[] workerGrayBytes = null;
 
-            if (debugTexture != null)
-            {
-                Destroy(debugTexture);
-                debugTexture = null;
-            }
-
-            if (needsDebugTexture)
-            {
-                debugTexture = new Texture2D(width, height, TextureFormat.RGBA32, false);
-                BindDebugTexture();
-            }
-        }
-        else if (needsDebugTexture && (debugPixels == null || debugPixels.Length != width * height))
+        try
         {
-            debugPixels = new Color32[width * height];
-        }
-
-        for (int y = 0; y < height; y++)
-        {
-            // Keep OpenCV input in its original top-down layout.
-            int detectionY = (height - 1) - y;
-
-            // Display orientation is handled independently so feed fixes don't break detection.
-            int displayY = flipDisplayVertically ? (height - 1) - y : y;
-
-            for (int x = 0; x < width; x++)
+            workerGrayBytes = grayBytes;
+            int pixelCount = width * height;
+            if (workerGrayBytes == null || workerGrayBytes.Length != pixelCount)
             {
-                int displayX = flipDisplayHorizontally ? (width - 1) - x : x;
+                workerGrayBytes = new byte[pixelCount];
+            }
 
-                int rawIndex = (y * width + x) * 4;
-                int detectionIndex = (detectionY * width) + x;
-                int displayIndex = (displayY * width) + displayX;
+            for (int y = 0; y < height; y++)
+            {
+                int detectionY = (height - 1) - y;
+                int rawRowIndex = y * width * 4;
+                int detectionRowIndex = detectionY * width;
 
-                byte grayValue = (byte)((rawData[rawIndex] + rawData[rawIndex + 1] + rawData[rawIndex + 2]) / 3);
-
-                grayBytes[detectionIndex] = grayValue;
-                if (debugPixels != null)
+                for (int x = 0; x < width; x++)
                 {
-                    debugPixels[displayIndex] = new Color32(grayValue, grayValue, grayValue, 255);
+                    int rawIndex = rawRowIndex + (x * 4);
+                    workerGrayBytes[detectionRowIndex + x] = (byte)((rgbaBytes[rawIndex] + rgbaBytes[rawIndex + 1] + rgbaBytes[rawIndex + 2]) / 3);
                 }
             }
+
+            AttachCurrentThreadForAndroid();
+
+            float[] markerData = needsDetailedMarkerData
+                ? DetectMarkersDetailed(workerGrayBytes, width, height)
+                : Array.Empty<float>();
+
+            float[] markerPoseData = shouldEstimateMarkerPoses
+                ? DetectMarkerPoses(workerGrayBytes, width, height, focalLength.x, focalLength.y, principalPoint.x, principalPoint.y)
+                : Array.Empty<float>();
+
+            stopwatch.Stop();
+            TrackingPipelineResult result = new TrackingPipelineResult
+            {
+                Width = width,
+                Height = height,
+                CameraPose = cameraPose,
+                GrayBytes = workerGrayBytes,
+                MarkerData = markerData,
+                MarkerPoseData = markerPoseData,
+                NeedsDebugTexture = needsDebugTexture,
+                NeedsDetailedMarkerData = needsDetailedMarkerData,
+                ProcessingMilliseconds = stopwatch.Elapsed.TotalMilliseconds
+            };
+
+            lock (trackingResultLock)
+            {
+                pendingTrackingResult = result;
+                hasPendingTrackingResult = true;
+            }
+        }
+        catch (Exception exception)
+        {
+            Debug.LogError($"Marker tracking worker failed: {exception}");
+            lock (trackingResultLock)
+            {
+                pendingTrackingResult = null;
+                hasPendingTrackingResult = true;
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref trackingWorkerRunning, 0);
+        }
+    }
+
+    void AttachCurrentThreadForAndroid()
+    {
+#if UNITY_ANDROID && !UNITY_EDITOR
+        AndroidJNI.AttachCurrentThread();
+#endif
+    }
+
+    void ApplyPendingTrackingResultIfAvailable()
+    {
+        TrackingPipelineResult result = null;
+        lock (trackingResultLock)
+        {
+            if (!hasPendingTrackingResult)
+            {
+                return;
+            }
+
+            result = pendingTrackingResult;
+            pendingTrackingResult = null;
+            hasPendingTrackingResult = false;
         }
 
-        bool needsDetailedMarkerData = drawDebugOverlay && needsDebugTexture;
-        if (needsDetailedMarkerData)
+        if (result == null)
         {
-            float[] markerData = DetectMarkersDetailed(grayBytes, width, height);
-            ParseMarkerData(markerData, markerDetections);
+            isProcessing = false;
+            return;
+        }
+
+        if (!enableMarkerTrackingPipeline)
+        {
+            isProcessing = false;
+            return;
+        }
+
+        grayBytes = result.GrayBytes;
+        lastProcessedCameraPose = result.CameraPose;
+        hasLastProcessedCameraPose = true;
+
+        UpdateTrackingThrottle(result.ProcessingMilliseconds);
+
+        if (result.NeedsDetailedMarkerData)
+        {
+            ParseMarkerData(result.MarkerData, markerDetections);
         }
         else
         {
             markerDetections.Clear();
         }
 
-        if (estimateMarkerPoses && TryGetProcessingIntrinsics(width, height, currentResolution, cameraIntrinsics, out Vector2 focalLength, out Vector2 principalPoint))
+        ParseMarkerPoseData(result.MarkerPoseData, markerPoseDetections);
+
+        if (result.NeedsDebugTexture)
         {
-            float[] markerPoseData = DetectMarkerPoses(grayBytes, width, height, focalLength.x, focalLength.y, principalPoint.x, principalPoint.y);
-            ParseMarkerPoseData(markerPoseData, markerPoseDetections);
-        }
-        else
-        {
-            markerPoseDetections.Clear();
+            UpdateDebugTextureFromGrayBytes(result.Width, result.Height);
         }
 
-        if (needsDetailedMarkerData && markerDetections.Count > 0 && debugPixels != null)
+        if (result.NeedsDetailedMarkerData && markerDetections.Count > 0 && debugPixels != null)
         {
-            DrawMarkerOverlayIntoTexture(width, height);
+            DrawMarkerOverlayIntoTexture(result.Width, result.Height);
         }
 
         if (debugTexture != null && debugPixels != null)
@@ -1777,25 +1885,79 @@ public class CameraFeedViewer : MonoBehaviour
             debugTexture.Apply();
         }
 
-        if (needsDebugTexture)
+        if (result.NeedsDebugTexture)
         {
-            UpdateMarkerVisuals(width, height);
+            UpdateMarkerVisuals(result.Width, result.Height);
         }
         else
         {
             HideInactiveVisuals(markerVisuals);
         }
 
-        UpdateTrackedTableOrigin(cameraPose);
+        UpdateTrackedTableOrigin(result.CameraPose);
         if (drawWorldMarkers)
         {
-            UpdateWorldMarkerVisuals(cameraPose);
+            UpdateWorldMarkerVisuals(result.CameraPose);
         }
         else
         {
             HideInactiveVisuals(worldMarkerVisuals);
         }
+
         isProcessing = false;
+    }
+
+    void UpdateDebugTextureFromGrayBytes(int width, int height)
+    {
+        int pixelCount = width * height;
+        if (debugPixels == null || debugPixels.Length != pixelCount)
+        {
+            debugPixels = new Color32[pixelCount];
+        }
+
+        if (debugTexture == null || debugTexture.width != width || debugTexture.height != height)
+        {
+            if (debugTexture != null)
+            {
+                Destroy(debugTexture);
+            }
+
+            debugTexture = new Texture2D(width, height, TextureFormat.RGBA32, false);
+            BindDebugTexture();
+        }
+
+        for (int y = 0; y < height; y++)
+        {
+            int displayY = flipDisplayVertically ? (height - 1) - y : y;
+            int detectionY = (height - 1) - y;
+
+            for (int x = 0; x < width; x++)
+            {
+                int displayX = flipDisplayHorizontally ? (width - 1) - x : x;
+                byte grayValue = grayBytes[(detectionY * width) + x];
+                debugPixels[(displayY * width) + displayX] = new Color32(grayValue, grayValue, grayValue, 255);
+            }
+        }
+    }
+
+    void UpdateTrackingThrottle(double processingMilliseconds)
+    {
+        float targetFrameMilliseconds = 1000f / Mathf.Max(45f, Application.targetFrameRate > 0 ? Application.targetFrameRate : 72f);
+        if (processingMilliseconds > targetFrameMilliseconds)
+        {
+            consecutiveSlowTrackingFrames++;
+        }
+        else
+        {
+            consecutiveSlowTrackingFrames = Mathf.Max(0, consecutiveSlowTrackingFrames - 1);
+        }
+
+        if (consecutiveSlowTrackingFrames >= 2)
+        {
+            float cooldownSeconds = Mathf.Clamp((float)(processingMilliseconds / 1000.0), 0.01f, 0.08f);
+            trackingCooldownUntilTime = Time.unscaledTime + cooldownSeconds;
+            consecutiveSlowTrackingFrames = 0;
+        }
     }
 
     void ParseMarkerData(float[] markerData, List<MarkerDetection> results)

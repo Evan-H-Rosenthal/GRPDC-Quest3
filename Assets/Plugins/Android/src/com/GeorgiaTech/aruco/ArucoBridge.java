@@ -13,6 +13,15 @@ public class ArucoBridge {
     private static final int[] TRACKED_MARKER_IDS = new int[] { 0, 1, 2, 3, 4 };
     private static final Mat CAMERA_MATRIX = Mat.eye(3, 3, CvType.CV_64F);
     private static final MatOfDouble DIST_COEFFS = new MatOfDouble(0.0, 0.0, 0.0, 0.0, 0.0);
+    private static final Mat GRAY = new Mat();
+    private static final Mat IDS = new Mat();
+    private static final List<Mat> CORNERS = new ArrayList<>();
+    private static final MatOfPoint2f IMAGE_POINTS = new MatOfPoint2f();
+    private static final Mat RVEC = new Mat();
+    private static final Mat TVEC = new Mat();
+    private static final float[] CORNER_DATA = new float[8];
+    private static final double[] RVEC_DATA = new double[3];
+    private static final double[] TVEC_DATA = new double[3];
     private static MatOfPoint3f objectPoints = null;
     private static float cachedMarkerLengthMeters = -1f;
 
@@ -23,54 +32,30 @@ public class ArucoBridge {
     // Keep the detector as a static member to avoid re-initializing it every frame
     private static ArucoDetector detector = null;
 
-    public static int detectMarkers(byte[] imageData, int width, int height) {
-        Mat gray = null;
-        Mat ids = null;
-        List<Mat> corners = new ArrayList<>();
-
+    public static synchronized int detectMarkers(byte[] imageData, int width, int height) {
         try {
             initializeDetector();
 
-            gray = new Mat(height, width, CvType.CV_8UC1);
-            gray.put(0, 0, imageData);
+            prepareDetectionInputs(imageData, width, height);
+            detector.detectMarkers(GRAY, CORNERS, IDS);
 
-            ids = new Mat();
-            detector.detectMarkers(gray, corners, ids);
-
-            return (int) ids.total();
+            return (int) IDS.total();
         } catch (Exception e) {
             Log.e(TAG, "detectMarkers failed", e);
             return -1;
         } finally {
-            for (Mat corner : corners) {
-                corner.release();
-            }
-
-            if (gray != null) {
-                gray.release();
-            }
-
-            if (ids != null) {
-                ids.release();
-            }
+            releaseCorners();
         }
     }
 
-    public static float[] detectMarkersDetailed(byte[] imageData, int width, int height) {
-        Mat gray = null;
-        Mat ids = null;
-        List<Mat> corners = new ArrayList<>();
-
+    public static synchronized float[] detectMarkersDetailed(byte[] imageData, int width, int height) {
         try {
             initializeDetector();
 
-            gray = new Mat(height, width, CvType.CV_8UC1);
-            gray.put(0, 0, imageData);
+            prepareDetectionInputs(imageData, width, height);
+            detector.detectMarkers(GRAY, CORNERS, IDS);
 
-            ids = new Mat();
-            detector.detectMarkers(gray, corners, ids);
-
-            int count = (int) ids.total();
+            int count = (int) IDS.total();
             float[] flattened = new float[1 + (count * 9)];
             flattened[0] = count;
             if (count == 0) {
@@ -78,21 +63,20 @@ public class ArucoBridge {
             }
 
             int[] idValues = new int[count];
-            ids.get(0, 0, idValues);
+            IDS.get(0, 0, idValues);
 
             for (int markerIndex = 0; markerIndex < count; markerIndex++) {
                 int baseIndex = 1 + (markerIndex * 9);
                 flattened[baseIndex] = idValues[markerIndex];
 
-                Mat cornerMat = corners.get(markerIndex);
-                float[] cornerData = new float[(int) (cornerMat.total() * cornerMat.channels())];
-                cornerMat.get(0, 0, cornerData);
+                Mat cornerMat = CORNERS.get(markerIndex);
+                cornerMat.get(0, 0, CORNER_DATA);
 
                 for (int cornerIndex = 0; cornerIndex < 4; cornerIndex++) {
                     int cornerBaseIndex = baseIndex + 1 + (cornerIndex * 2);
                     int sourceBaseIndex = cornerIndex * 2;
-                    flattened[cornerBaseIndex] = cornerData[sourceBaseIndex];
-                    flattened[cornerBaseIndex + 1] = cornerData[sourceBaseIndex + 1];
+                    flattened[cornerBaseIndex] = CORNER_DATA[sourceBaseIndex];
+                    flattened[cornerBaseIndex + 1] = CORNER_DATA[sourceBaseIndex + 1];
                 }
             }
 
@@ -102,36 +86,19 @@ public class ArucoBridge {
             Log.e(TAG, "detectMarkersDetailed failed", e);
             return new float[] { -1f };
         } finally {
-            for (Mat corner : corners) {
-                corner.release();
-            }
-
-            if (gray != null) {
-                gray.release();
-            }
-
-            if (ids != null) {
-                ids.release();
-            }
+            releaseCorners();
         }
     }
 
-    public static float[] estimateMarkerPoses(byte[] imageData, int width, int height, float fx, float fy, float cx, float cy, float markerLengthMeters) {
-        Mat gray = null;
-        Mat ids = null;
-        List<Mat> corners = new ArrayList<>();
-
+    public static synchronized float[] estimateMarkerPoses(byte[] imageData, int width, int height, float fx, float fy, float cx, float cy, float markerLengthMeters) {
         try {
             initializeDetector();
             ensurePoseEstimationInputs(fx, fy, cx, cy, markerLengthMeters);
 
-            gray = new Mat(height, width, CvType.CV_8UC1);
-            gray.put(0, 0, imageData);
+            prepareDetectionInputs(imageData, width, height);
+            detector.detectMarkers(GRAY, CORNERS, IDS);
 
-            ids = new Mat();
-            detector.detectMarkers(gray, corners, ids);
-
-            int count = (int) ids.total();
+            int count = (int) IDS.total();
             float[] flattened = new float[1 + (count * 7)];
             if (count == 0) {
                 flattened[0] = 0f;
@@ -139,7 +106,7 @@ public class ArucoBridge {
             }
 
             int[] idValues = new int[count];
-            ids.get(0, 0, idValues);
+            IDS.get(0, 0, idValues);
 
             int solvedCount = 0;
             for (int markerIndex = 0; markerIndex < count; markerIndex++) {
@@ -147,55 +114,46 @@ public class ArucoBridge {
                     continue;
                 }
 
-                Mat cornerMat = corners.get(markerIndex);
-                float[] cornerData = new float[(int) (cornerMat.total() * cornerMat.channels())];
-                cornerMat.get(0, 0, cornerData);
+                Mat cornerMat = CORNERS.get(markerIndex);
+                cornerMat.get(0, 0, CORNER_DATA);
 
-                MatOfPoint2f imagePoints = new MatOfPoint2f(
-                    new Point(cornerData[0], cornerData[1]),
-                    new Point(cornerData[2], cornerData[3]),
-                    new Point(cornerData[4], cornerData[5]),
-                    new Point(cornerData[6], cornerData[7])
+                IMAGE_POINTS.fromArray(
+                    new Point(CORNER_DATA[0], CORNER_DATA[1]),
+                    new Point(CORNER_DATA[2], CORNER_DATA[3]),
+                    new Point(CORNER_DATA[4], CORNER_DATA[5]),
+                    new Point(CORNER_DATA[6], CORNER_DATA[7])
                 );
 
-                Mat rvec = new Mat();
-                Mat tvec = new Mat();
+                RVEC.create(3, 1, CvType.CV_64F);
+                TVEC.create(3, 1, CvType.CV_64F);
 
-                try {
-                    boolean solved = Calib3d.solvePnP(
-                        objectPoints,
-                        imagePoints,
-                        CAMERA_MATRIX,
-                        DIST_COEFFS,
-                        rvec,
-                        tvec,
-                        false,
-                        Calib3d.SOLVEPNP_IPPE_SQUARE);
+                boolean solved = Calib3d.solvePnP(
+                    objectPoints,
+                    IMAGE_POINTS,
+                    CAMERA_MATRIX,
+                    DIST_COEFFS,
+                    RVEC,
+                    TVEC,
+                    false,
+                    Calib3d.SOLVEPNP_IPPE_SQUARE);
 
-                    if (!solved) {
-                        solved = Calib3d.solvePnP(objectPoints, imagePoints, CAMERA_MATRIX, DIST_COEFFS, rvec, tvec);
-                    }
+                if (!solved) {
+                    solved = Calib3d.solvePnP(objectPoints, IMAGE_POINTS, CAMERA_MATRIX, DIST_COEFFS, RVEC, TVEC);
+                }
 
-                    if (solved) {
-                        int baseIndex = 1 + (solvedCount * 7);
-                        double[] rvecData = new double[3];
-                        double[] tvecData = new double[3];
-                        rvec.get(0, 0, rvecData);
-                        tvec.get(0, 0, tvecData);
+                if (solved) {
+                    int baseIndex = 1 + (solvedCount * 7);
+                    RVEC.get(0, 0, RVEC_DATA);
+                    TVEC.get(0, 0, TVEC_DATA);
 
-                        flattened[baseIndex] = idValues[markerIndex];
-                        flattened[baseIndex + 1] = (float) rvecData[0];
-                        flattened[baseIndex + 2] = (float) rvecData[1];
-                        flattened[baseIndex + 3] = (float) rvecData[2];
-                        flattened[baseIndex + 4] = (float) tvecData[0];
-                        flattened[baseIndex + 5] = (float) tvecData[1];
-                        flattened[baseIndex + 6] = (float) tvecData[2];
-                        solvedCount++;
-                    }
-                } finally {
-                    imagePoints.release();
-                    rvec.release();
-                    tvec.release();
+                    flattened[baseIndex] = idValues[markerIndex];
+                    flattened[baseIndex + 1] = (float) RVEC_DATA[0];
+                    flattened[baseIndex + 2] = (float) RVEC_DATA[1];
+                    flattened[baseIndex + 3] = (float) RVEC_DATA[2];
+                    flattened[baseIndex + 4] = (float) TVEC_DATA[0];
+                    flattened[baseIndex + 5] = (float) TVEC_DATA[1];
+                    flattened[baseIndex + 6] = (float) TVEC_DATA[2];
+                    solvedCount++;
                 }
             }
 
@@ -205,18 +163,22 @@ public class ArucoBridge {
             Log.e(TAG, "estimateMarkerPoses failed", e);
             return new float[] { -1f };
         } finally {
-            for (Mat corner : corners) {
-                corner.release();
-            }
-
-            if (gray != null) {
-                gray.release();
-            }
-
-            if (ids != null) {
-                ids.release();
-            }
+            releaseCorners();
         }
+    }
+
+    private static void prepareDetectionInputs(byte[] imageData, int width, int height) {
+        releaseCorners();
+        GRAY.create(height, width, CvType.CV_8UC1);
+        GRAY.put(0, 0, imageData);
+    }
+
+    private static void releaseCorners() {
+        for (Mat corner : CORNERS) {
+            corner.release();
+        }
+
+        CORNERS.clear();
     }
 
     private static void ensurePoseEstimationInputs(float fx, float fy, float cx, float cy, float markerLengthMeters) {
