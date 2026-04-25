@@ -1,9 +1,26 @@
 using System.Collections;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.SceneManagement;
 
 public class InstructionFlowController : MonoBehaviour
 {
+    private enum FlowStage
+    {
+        Welcome,
+        DemoOverview,
+        Hands,
+        Tracking,
+        Grabbing,
+        Task1Overview,
+        Countdown,
+        Task1Complete,
+        Task2Overview,
+        Task2Complete,
+        Task3Overview,
+        Task3Complete
+    }
+
     [SerializeField] private GameObject canvasRoot;
     [SerializeField] private Text headerText;
     [SerializeField] private Text instructionalText;
@@ -12,45 +29,8 @@ public class InstructionFlowController : MonoBehaviour
     [SerializeField] private CameraFeedViewer cameraFeedViewer;
     [SerializeField] private XRHandJointVisualizer recorder;
 
-    private const int IdlePageIndex = 0;
-    private const int ReadyToStartPageIndex = 5;
-    private const int CountdownPageIndex = 6;
-
-    private readonly PageData[] _pages =
-    {
-        new PageData(
-            "Welcome to the Demo!",
-            "Please poke the button on the right with your pointer finger to continue."),
-        new PageData(
-            "Demo Overview",
-            "You will be completing three different tasks in this demo.\n\n" +
-            "The demo should not take more than five minutes.\n\n" +
-            "If you do not want to participate, please poke the \"Back\" button."),
-        new PageData(
-            "Considerations: Hands",
-            "You will be moving around the colored cubes on the table with your <b>Right Hand Only.</b>\n\n" +
-            "The program will only record the things you do with your Right Hand.\n\n" +
-            "If you are Left-Handed, please try your best."),
-        new PageData(
-            "Considerations: Tracking",
-            "Please do not move the blocks or your hand around too fast.\n\n" +
-            "If the virtual objects begin to act erratic, please move closer to the table.\n\n" +
-            "You will get better results if you take your time."),
-        new PageData(
-            "Considerations: Grabbing",
-            "Try not to obscure the markers on the sides of the blocks unless needed.\n\n" +
-            "Grabbing the blocks by their edges is an effective way to move them."),
-        new PageData(
-            "Task 1: 3-block Stack",
-            "Your first task is to stack three blocks on top of each other in the order specified.\n\n" +
-            "Please stack the first block onto the colored circle.\n\n" +
-            "The colored cubes next to the circle will show you the order to stack the blocks."),
-        new PageData(
-            "Task 1 Beginning!",
-            string.Empty)
-    };
-
-    private int _currentPageIndex;
+    private FlowStage _currentStage;
+    private CameraFeedViewer.DemoTaskType _countdownTask = CameraFeedViewer.DemoTaskType.None;
     private Coroutine _countdownCoroutine;
     private Canvas _canvas;
     private GraphicRaycaster _graphicRaycaster;
@@ -85,12 +65,13 @@ public class InstructionFlowController : MonoBehaviour
 
         if (cameraFeedViewer != null)
         {
-            cameraFeedViewer.StackingTaskCompleted += HandleStackingTaskCompleted;
+            cameraFeedViewer.TaskCompleted += HandleTaskCompleted;
         }
 
-        _currentPageIndex = IdlePageIndex;
+        _currentStage = FlowStage.Welcome;
+        _countdownTask = CameraFeedViewer.DemoTaskType.None;
         SetCanvasVisible(true);
-        ShowPage(_currentPageIndex);
+        ShowCurrentStage();
     }
 
     private void OnDisable()
@@ -107,7 +88,7 @@ public class InstructionFlowController : MonoBehaviour
 
         if (cameraFeedViewer != null)
         {
-            cameraFeedViewer.StackingTaskCompleted -= HandleStackingTaskCompleted;
+            cameraFeedViewer.TaskCompleted -= HandleTaskCompleted;
         }
 
         if (_countdownCoroutine != null)
@@ -119,13 +100,39 @@ public class InstructionFlowController : MonoBehaviour
 
     private void HandleLeftButtonClicked()
     {
-        if (_countdownCoroutine != null || _currentPageIndex == IdlePageIndex)
+        if (_countdownCoroutine != null)
         {
             return;
         }
 
-        _currentPageIndex = Mathf.Max(IdlePageIndex, _currentPageIndex - 1);
-        ShowPage(_currentPageIndex);
+        switch (_currentStage)
+        {
+            case FlowStage.DemoOverview:
+                _currentStage = FlowStage.Welcome;
+                break;
+            case FlowStage.Hands:
+                _currentStage = FlowStage.DemoOverview;
+                break;
+            case FlowStage.Tracking:
+                _currentStage = FlowStage.Hands;
+                break;
+            case FlowStage.Grabbing:
+                _currentStage = FlowStage.Tracking;
+                break;
+            case FlowStage.Task1Overview:
+                _currentStage = FlowStage.Grabbing;
+                break;
+            case FlowStage.Task2Overview:
+                _currentStage = FlowStage.Task1Complete;
+                break;
+            case FlowStage.Task3Overview:
+                _currentStage = FlowStage.Task2Complete;
+                break;
+            default:
+                return;
+        }
+
+        ShowCurrentStage();
     }
 
     private void HandleRightButtonClicked()
@@ -135,29 +142,193 @@ public class InstructionFlowController : MonoBehaviour
             return;
         }
 
-        if (_currentPageIndex < CountdownPageIndex)
+        switch (_currentStage)
         {
-            _currentPageIndex++;
-            ShowPage(_currentPageIndex);
+            case FlowStage.Welcome:
+                _currentStage = FlowStage.DemoOverview;
+                break;
+            case FlowStage.DemoOverview:
+                _currentStage = FlowStage.Hands;
+                break;
+            case FlowStage.Hands:
+                _currentStage = FlowStage.Tracking;
+                break;
+            case FlowStage.Tracking:
+                _currentStage = FlowStage.Grabbing;
+                break;
+            case FlowStage.Grabbing:
+                _currentStage = FlowStage.Task1Overview;
+                break;
+            case FlowStage.Task1Overview:
+                StartCountdown(CameraFeedViewer.DemoTaskType.Task1Stack);
+                return;
+            case FlowStage.Task1Complete:
+                _currentStage = FlowStage.Task2Overview;
+                break;
+            case FlowStage.Task2Overview:
+                StartCountdown(CameraFeedViewer.DemoTaskType.Task2Placement);
+                return;
+            case FlowStage.Task2Complete:
+                _currentStage = FlowStage.Task3Overview;
+                break;
+            case FlowStage.Task3Overview:
+                StartCountdown(CameraFeedViewer.DemoTaskType.Task3DoubleStack);
+                return;
+            case FlowStage.Task3Complete:
+                RestartDemo();
+                return;
+            default:
+                return;
+        }
+
+        ShowCurrentStage();
+    }
+
+    private void StartCountdown(CameraFeedViewer.DemoTaskType taskType)
+    {
+        _countdownTask = taskType;
+        _currentStage = FlowStage.Countdown;
+        ShowCurrentStage();
+    }
+
+    private void ShowCurrentStage()
+    {
+        switch (_currentStage)
+        {
+            case FlowStage.Welcome:
+                ShowPage(
+                    "Welcome to the Demo!",
+                    "Please poke the button on the right with your pointer finger to continue.",
+                    false,
+                    true,
+                    "Continue");
+                break;
+            case FlowStage.DemoOverview:
+                ShowPage(
+                    "Demo Overview",
+                    "You will be completing three different tasks in this demo.\n\n" +
+                    "The demo should not take more than five minutes.\n\n" +
+                    "If you do not want to participate, please poke the \"Back\" button.",
+                    true,
+                    true,
+                    "Continue");
+                break;
+            case FlowStage.Hands:
+                ShowPage(
+                    "Considerations: Hands",
+                    "You will be moving around the colored cubes on the table with your <b>Right Hand Only.</b>\n\n" +
+                    "The program will only record the things you do with your Right Hand.\n\n" +
+                    "If you are Left-Handed, please try your best.",
+                    true,
+                    true,
+                    "Continue");
+                break;
+            case FlowStage.Tracking:
+                ShowPage(
+                    "Considerations: Tracking",
+                    "Please do not move the blocks or your hand around too fast.\n\n" +
+                    "If the virtual objects begin to act erratic, please move closer to the table.\n\n" +
+                    "You will get better results if you take your time.",
+                    true,
+                    true,
+                    "Continue");
+                break;
+            case FlowStage.Grabbing:
+                ShowPage(
+                    "Considerations: Grabbing",
+                    "Try not to obscure the markers on the sides of the blocks unless needed.\n\n" +
+                    "Grabbing the blocks by their edges is an effective way to move them.",
+                    true,
+                    true,
+                    "Continue");
+                break;
+            case FlowStage.Task1Overview:
+                ShowPage(
+                    "Task 1: 3-block Stack",
+                    "Your first task is to stack three blocks on top of each other in the order specified.\n\n" +
+                    "Please stack the first block onto the colored circle.\n\n" +
+                    "The colored cubes next to the circle will show you the order to stack the blocks.",
+                    true,
+                    true,
+                    "Start!");
+                break;
+            case FlowStage.Countdown:
+                ShowPage(
+                    GetCountdownHeader(),
+                    string.Empty,
+                    false,
+                    false,
+                    string.Empty);
+                if (_countdownCoroutine == null)
+                {
+                    _countdownCoroutine = StartCoroutine(RunCountdown());
+                }
+                break;
+            case FlowStage.Task1Complete:
+                ShowPage(
+                    "Task 1 Complete!",
+                    "You completed the task!\n\n" +
+                    "I hope you got a feel for how you should move the blocks around.\n\n" +
+                    "Poke the \"Continue\" button to move to the next task.",
+                    false,
+                    true,
+                    "Continue");
+                break;
+            case FlowStage.Task2Overview:
+                ShowPage(
+                    "Task 2 Overview",
+                    "The next task is to position the blocks in their specified locations.\n\n" +
+                    "Place the blocks on the colored circles.\n\n" +
+                    "You will not need to stack any blocks for this task.",
+                    true,
+                    true,
+                    "Start");
+                break;
+            case FlowStage.Task2Complete:
+                ShowPage(
+                    "Task 2 Complete!",
+                    "You completed the task!\n\n" +
+                    "If you would like to view the recordings of your hands, now's probably the time to do so.\n\n" +
+                    "Otherwise, there is one more task to complete.",
+                    false,
+                    true,
+                    "Continue");
+                break;
+            case FlowStage.Task3Overview:
+                ShowPage(
+                    "Task 3: 2 Stacks of 2",
+                    "The final task is to stack two towers of two blocks each.\n\n" +
+                    "You should be familiar with how to stack and move the blocks by now.",
+                    true,
+                    true,
+                    "Start");
+                break;
+            case FlowStage.Task3Complete:
+                ShowPage(
+                    "Task 3 Complete!",
+                    "You completed task 3!\n\n" +
+                    "This is the end of the VR portion of the demo. Please remove the headset.\n\n" +
+                    "Thank you for participating!",
+                    false,
+                    true,
+                    "Continue");
+                break;
         }
     }
 
-    private void ShowPage(int pageIndex)
+    private void ShowPage(string header, string body, bool showLeftButton, bool showRightButton, string rightButtonLabel)
     {
-        PageData page = _pages[pageIndex];
+        SetCanvasVisible(true);
 
         if (headerText != null)
         {
-            headerText.text = page.Header;
+            headerText.text = header;
         }
 
         if (instructionalText != null)
         {
-            instructionalText.text = page.Body;
+            instructionalText.text = body;
         }
-
-        bool showLeftButton = pageIndex != IdlePageIndex && pageIndex != CountdownPageIndex;
-        bool showRightButton = pageIndex != CountdownPageIndex;
 
         if (leftButton != null)
         {
@@ -169,14 +340,8 @@ public class InstructionFlowController : MonoBehaviour
         if (rightButton != null)
         {
             rightButton.gameObject.SetActive(showRightButton);
-            string rightButtonLabel = pageIndex == ReadyToStartPageIndex ? "Start!" : "Continue";
             rightButton.SetIdleText(rightButtonLabel);
             rightButton.SetPressedText(rightButtonLabel);
-        }
-
-        if (pageIndex == CountdownPageIndex)
-        {
-            _countdownCoroutine = StartCoroutine(RunCountdown());
         }
     }
 
@@ -194,11 +359,24 @@ public class InstructionFlowController : MonoBehaviour
             yield return new WaitForSeconds(1f);
         }
 
+        CameraFeedViewer.DemoTaskType taskToStart = _countdownTask;
+        _countdownTask = CameraFeedViewer.DemoTaskType.None;
         _countdownCoroutine = null;
 
         if (cameraFeedViewer != null)
         {
-            cameraFeedViewer.BeginStackingTask();
+            switch (taskToStart)
+            {
+                case CameraFeedViewer.DemoTaskType.Task1Stack:
+                    cameraFeedViewer.BeginStackingTask();
+                    break;
+                case CameraFeedViewer.DemoTaskType.Task2Placement:
+                    cameraFeedViewer.BeginColorPlacementTask();
+                    break;
+                case CameraFeedViewer.DemoTaskType.Task3DoubleStack:
+                    cameraFeedViewer.BeginDoubleStackTask();
+                    break;
+            }
         }
 
         if (recorder != null)
@@ -209,36 +387,29 @@ public class InstructionFlowController : MonoBehaviour
         SetCanvasVisible(false);
     }
 
-    private void HandleStackingTaskCompleted()
+    private void HandleTaskCompleted(CameraFeedViewer.DemoTaskType completedTask)
     {
         if (recorder != null)
         {
             recorder.StopRecordingIfNeeded();
         }
 
-        SetCanvasVisible(true);
-
-        if (headerText != null)
+        switch (completedTask)
         {
-            headerText.text = "Task 1 Complete!";
+            case CameraFeedViewer.DemoTaskType.Task1Stack:
+                _currentStage = FlowStage.Task1Complete;
+                break;
+            case CameraFeedViewer.DemoTaskType.Task2Placement:
+                _currentStage = FlowStage.Task2Complete;
+                break;
+            case CameraFeedViewer.DemoTaskType.Task3DoubleStack:
+                _currentStage = FlowStage.Task3Complete;
+                break;
+            default:
+                return;
         }
 
-        if (instructionalText != null)
-        {
-            instructionalText.text = "You completed the task!";
-        }
-
-        if (leftButton != null)
-        {
-            leftButton.gameObject.SetActive(false);
-        }
-
-        if (rightButton != null)
-        {
-            rightButton.gameObject.SetActive(true);
-            rightButton.SetIdleText("Continue");
-            rightButton.SetPressedText("Continue");
-        }
+        ShowCurrentStage();
     }
 
     private void SetCanvasVisible(bool isVisible)
@@ -323,15 +494,25 @@ public class InstructionFlowController : MonoBehaviour
         }
     }
 
-    private readonly struct PageData
+    private string GetCountdownHeader()
     {
-        public readonly string Header;
-        public readonly string Body;
-
-        public PageData(string header, string body)
+        switch (_countdownTask)
         {
-            Header = header;
-            Body = body;
+            case CameraFeedViewer.DemoTaskType.Task2Placement:
+                return "Task 2 Beginning!";
+            case CameraFeedViewer.DemoTaskType.Task3DoubleStack:
+                return "Task 3 Beginning!";
+            default:
+                return "Task 1 Beginning!";
+        }
+    }
+
+    private void RestartDemo()
+    {
+        Scene activeScene = SceneManager.GetActiveScene();
+        if (activeScene.IsValid())
+        {
+            SceneManager.LoadScene(activeScene.buildIndex);
         }
     }
 }

@@ -11,6 +11,14 @@ using Debug = UnityEngine.Debug;
 
 public class CameraFeedViewer : MonoBehaviour
 {
+    public enum DemoTaskType
+    {
+        None,
+        Task1Stack,
+        Task2Placement,
+        Task3DoubleStack
+    }
+
     public enum MarkerOverlayMode
     {
         WireframePlane,
@@ -112,6 +120,16 @@ public class CameraFeedViewer : MonoBehaviour
         public readonly List<Material> PreviewStatusMaterials = new List<Material>(6);
     }
 
+    class PlacementPadVisual
+    {
+        public Transform Root;
+        public Transform SurfaceMarker;
+        public Material SurfaceMaterial;
+        public Transform SymbolRoot;
+        public readonly List<Transform> SymbolSegments = new List<Transform>(3);
+        public readonly List<Material> SymbolMaterials = new List<Material>(3);
+    }
+
     class PlacementTaskRequirement
     {
         public int CubeId;
@@ -206,6 +224,8 @@ public class CameraFeedViewer : MonoBehaviour
     [Min(0f)] public float placementTaskPreviewCubeGapMeters = 0.008f;
     [Min(0.005f)] public float placementTaskPreviewStatusOffsetMeters = 0.04f;
     [Min(0.005f)] public float placementTaskPreviewStatusScaleMeters = 0.02f;
+    [Min(0.08f)] public float colorPlacementPadRadiusMeters = 0.18f;
+    [Min(0f)] public float colorPlacementPadRotationJitterDegrees = 20f;
 
     Texture2D debugTexture;
     AndroidJavaClass arucoClass;
@@ -253,6 +273,13 @@ public class CameraFeedViewer : MonoBehaviour
     bool isPlacementTaskActive;
     bool hasCompletedPlacementTask;
     readonly List<PlacementTaskRequirement> placementTaskRequirements = new List<PlacementTaskRequirement>(3);
+    readonly List<PlacementTaskRequirement> colorPlacementRequirements = new List<PlacementTaskRequirement>(4);
+    readonly List<Vector2> colorPlacementOffsets = new List<Vector2>(4);
+    readonly List<PlacementPadVisual> colorPlacementPadVisuals = new List<PlacementPadVisual>(4);
+    readonly List<PlacementTaskRequirement> doubleStackRequirements = new List<PlacementTaskRequirement>(4);
+    readonly List<Vector2> doubleStackTargetOffsets = new List<Vector2>(2);
+    readonly List<PlacementTargetVisual> doubleStackTargetVisuals = new List<PlacementTargetVisual>(2);
+    DemoTaskType activeDemoTask = DemoTaskType.None;
     GameObject pipelineDisabledTestCube;
     Material pipelineDisabledTestCubeMaterial;
 
@@ -271,7 +298,7 @@ public class CameraFeedViewer : MonoBehaviour
     static readonly Color AxisYColor = new Color(0.25f, 1f, 0.25f, 1f);
     static readonly Color AxisZColor = new Color(0.25f, 0.55f, 1f, 1f);
 
-    public event Action StackingTaskCompleted;
+    public event Action<DemoTaskType> TaskCompleted;
 
     public bool TryGetTableOriginPose(out Pose pose)
     {
@@ -289,12 +316,14 @@ public class CameraFeedViewer : MonoBehaviour
 
     public void BeginStackingTask()
     {
+        activeDemoTask = DemoTaskType.Task1Stack;
         hasCompletedPlacementTask = false;
         RefreshCubeTrackersIfNeeded();
 
         if (!TryGeneratePlacementTaskRequirements())
         {
             Debug.LogWarning("Could not start stacking task because fewer than three cube trackers were available.");
+            activeDemoTask = DemoTaskType.None;
             isPlacementTaskActive = false;
             hasPlacementTarget = false;
             placementTargetCubeId = -1;
@@ -303,6 +332,44 @@ public class CameraFeedViewer : MonoBehaviour
 
         RandomizePlacementTarget();
         isPlacementTaskActive = hasPlacementTarget && placementTaskRequirements.Count >= 3;
+    }
+
+    public void BeginColorPlacementTask()
+    {
+        activeDemoTask = DemoTaskType.Task2Placement;
+        hasCompletedPlacementTask = false;
+        RefreshCubeTrackersIfNeeded();
+
+        if (!TryGenerateColorPlacementRequirements())
+        {
+            Debug.LogWarning("Could not start color placement task because fewer than four cube trackers were available.");
+            activeDemoTask = DemoTaskType.None;
+            isPlacementTaskActive = false;
+            colorPlacementOffsets.Clear();
+            return;
+        }
+
+        RandomizeColorPlacementTargets();
+        isPlacementTaskActive = colorPlacementRequirements.Count >= 4 && colorPlacementOffsets.Count == colorPlacementRequirements.Count;
+    }
+
+    public void BeginDoubleStackTask()
+    {
+        activeDemoTask = DemoTaskType.Task3DoubleStack;
+        hasCompletedPlacementTask = false;
+        RefreshCubeTrackersIfNeeded();
+
+        if (!TryGenerateDoubleStackRequirements())
+        {
+            Debug.LogWarning("Could not start double stack task because fewer than four cube trackers were available.");
+            activeDemoTask = DemoTaskType.None;
+            isPlacementTaskActive = false;
+            doubleStackTargetOffsets.Clear();
+            return;
+        }
+
+        RandomizeDoubleStackTargets();
+        isPlacementTaskActive = doubleStackRequirements.Count >= 4 && doubleStackTargetOffsets.Count == 2;
     }
 
     public int GetLatestMarkerWorldPoses(int markerId, List<Pose> results)
@@ -529,6 +596,112 @@ public class CameraFeedViewer : MonoBehaviour
         placementTargetVisual = visual;
     }
 
+    PlacementTargetVisual CreatePlacementTargetVisual(string name, int previewCubeCount)
+    {
+        GameObject rootObject = new GameObject(name);
+        PlacementTargetVisual visual = new PlacementTargetVisual
+        {
+            Root = rootObject.transform
+        };
+
+        GameObject surface = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        surface.name = "SurfaceMarker";
+        surface.transform.SetParent(visual.Root, false);
+        Collider surfaceCollider = surface.GetComponent<Collider>();
+        if (surfaceCollider != null)
+        {
+            surfaceCollider.enabled = false;
+        }
+
+        visual.SurfaceMarker = surface.transform;
+        visual.SurfaceRenderer = surface.GetComponent<Renderer>();
+        visual.SurfaceRenderer.shadowCastingMode = ShadowCastingMode.Off;
+        visual.SurfaceRenderer.receiveShadows = false;
+        visual.SurfaceMaterial = CreateHudCellMaterial();
+        visual.SurfaceRenderer.sharedMaterial = visual.SurfaceMaterial;
+
+        GameObject symbolRootObject = new GameObject("StatusSymbol");
+        symbolRootObject.transform.SetParent(visual.Root, false);
+        visual.SymbolRoot = symbolRootObject.transform;
+
+        for (int i = 0; i < 3; i++)
+        {
+            GameObject segment = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            segment.name = $"Segment_{i + 1}";
+            segment.transform.SetParent(visual.SymbolRoot, false);
+            Collider segmentCollider = segment.GetComponent<Collider>();
+            if (segmentCollider != null)
+            {
+                segmentCollider.enabled = false;
+            }
+
+            Renderer renderer = segment.GetComponent<Renderer>();
+            renderer.shadowCastingMode = ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+            Material material = CreateHudCellMaterial();
+            renderer.sharedMaterial = material;
+
+            visual.SymbolSegments.Add(segment.transform);
+            visual.SymbolRenderers.Add(renderer);
+            visual.SymbolMaterials.Add(material);
+        }
+
+        GameObject taskPreviewRootObject = new GameObject("TaskPreview");
+        taskPreviewRootObject.transform.SetParent(visual.Root, false);
+        visual.TaskPreviewRoot = taskPreviewRootObject.transform;
+
+        for (int i = 0; i < previewCubeCount; i++)
+        {
+            GameObject previewCube = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            previewCube.name = $"PreviewCube_{i + 1}";
+            previewCube.transform.SetParent(visual.TaskPreviewRoot, false);
+            Collider previewCubeCollider = previewCube.GetComponent<Collider>();
+            if (previewCubeCollider != null)
+            {
+                previewCubeCollider.enabled = false;
+            }
+
+            Renderer previewCubeRenderer = previewCube.GetComponent<Renderer>();
+            previewCubeRenderer.shadowCastingMode = ShadowCastingMode.Off;
+            previewCubeRenderer.receiveShadows = false;
+            Material previewCubeMaterial = CreateHudCellMaterial();
+            previewCubeRenderer.sharedMaterial = previewCubeMaterial;
+
+            visual.PreviewCubes.Add(previewCube.transform);
+            visual.PreviewCubeRenderers.Add(previewCubeRenderer);
+            visual.PreviewCubeMaterials.Add(previewCubeMaterial);
+
+            GameObject previewStatusRootObject = new GameObject($"PreviewStatus_{i + 1}");
+            previewStatusRootObject.transform.SetParent(visual.TaskPreviewRoot, false);
+            Transform previewStatusRoot = previewStatusRootObject.transform;
+            visual.PreviewStatusRoots.Add(previewStatusRoot);
+
+            for (int segmentIndex = 0; segmentIndex < 2; segmentIndex++)
+            {
+                GameObject statusSegment = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                statusSegment.name = $"Segment_{segmentIndex + 1}";
+                statusSegment.transform.SetParent(previewStatusRoot, false);
+                Collider statusCollider = statusSegment.GetComponent<Collider>();
+                if (statusCollider != null)
+                {
+                    statusCollider.enabled = false;
+                }
+
+                Renderer statusRenderer = statusSegment.GetComponent<Renderer>();
+                statusRenderer.shadowCastingMode = ShadowCastingMode.Off;
+                statusRenderer.receiveShadows = false;
+                Material statusMaterial = CreateHudCellMaterial();
+                statusRenderer.sharedMaterial = statusMaterial;
+
+                visual.PreviewStatusRenderers.Add(statusRenderer);
+                visual.PreviewStatusMaterials.Add(statusMaterial);
+            }
+        }
+
+        rootObject.SetActive(false);
+        return visual;
+    }
+
     void DestroyPlacementTargetVisual()
     {
         if (placementTargetVisual == null)
@@ -571,6 +744,178 @@ public class CameraFeedViewer : MonoBehaviour
         }
 
         placementTargetVisual = null;
+    }
+
+    PlacementPadVisual CreatePlacementPadVisual(string name)
+    {
+        GameObject rootObject = new GameObject(name);
+        PlacementPadVisual visual = new PlacementPadVisual
+        {
+            Root = rootObject.transform
+        };
+
+        GameObject surface = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        surface.name = "SurfaceMarker";
+        surface.transform.SetParent(visual.Root, false);
+        Collider surfaceCollider = surface.GetComponent<Collider>();
+        if (surfaceCollider != null)
+        {
+            surfaceCollider.enabled = false;
+        }
+
+        Renderer surfaceRenderer = surface.GetComponent<Renderer>();
+        surfaceRenderer.shadowCastingMode = ShadowCastingMode.Off;
+        surfaceRenderer.receiveShadows = false;
+        visual.SurfaceMarker = surface.transform;
+        visual.SurfaceMaterial = CreateHudCellMaterial();
+        surfaceRenderer.sharedMaterial = visual.SurfaceMaterial;
+
+        GameObject symbolRootObject = new GameObject("StatusSymbol");
+        symbolRootObject.transform.SetParent(visual.Root, false);
+        Transform symbolRoot = symbolRootObject.transform;
+        visual.SymbolRoot = symbolRoot;
+
+        for (int i = 0; i < 3; i++)
+        {
+            GameObject segment = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            segment.name = $"Segment_{i + 1}";
+            segment.transform.SetParent(symbolRoot, false);
+            Collider segmentCollider = segment.GetComponent<Collider>();
+            if (segmentCollider != null)
+            {
+                segmentCollider.enabled = false;
+            }
+
+            Renderer renderer = segment.GetComponent<Renderer>();
+            renderer.shadowCastingMode = ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+            Material material = CreateHudCellMaterial();
+            renderer.sharedMaterial = material;
+
+            visual.SymbolSegments.Add(segment.transform);
+            visual.SymbolMaterials.Add(material);
+        }
+
+        rootObject.SetActive(false);
+        return visual;
+    }
+
+    void EnsureColorPlacementPadVisualCount(int targetCount)
+    {
+        while (colorPlacementPadVisuals.Count < targetCount)
+        {
+            colorPlacementPadVisuals.Add(CreatePlacementPadVisual($"PlacementPad_{colorPlacementPadVisuals.Count + 1}"));
+        }
+    }
+
+    void HideAllColorPlacementPadVisuals()
+    {
+        for (int i = 0; i < colorPlacementPadVisuals.Count; i++)
+        {
+            if (colorPlacementPadVisuals[i]?.Root != null && colorPlacementPadVisuals[i].Root.gameObject.activeSelf)
+            {
+                colorPlacementPadVisuals[i].Root.gameObject.SetActive(false);
+            }
+        }
+    }
+
+    void DestroyColorPlacementPadVisuals()
+    {
+        for (int i = 0; i < colorPlacementPadVisuals.Count; i++)
+        {
+            PlacementPadVisual visual = colorPlacementPadVisuals[i];
+            if (visual == null)
+            {
+                continue;
+            }
+
+            if (visual.SurfaceMaterial != null)
+            {
+                Destroy(visual.SurfaceMaterial);
+            }
+
+            for (int materialIndex = 0; materialIndex < visual.SymbolMaterials.Count; materialIndex++)
+            {
+                if (visual.SymbolMaterials[materialIndex] != null)
+                {
+                    Destroy(visual.SymbolMaterials[materialIndex]);
+                }
+            }
+
+            if (visual.Root != null)
+            {
+                Destroy(visual.Root.gameObject);
+            }
+        }
+
+        colorPlacementPadVisuals.Clear();
+    }
+
+    void EnsureDoubleStackTargetVisualCount(int targetCount)
+    {
+        while (doubleStackTargetVisuals.Count < targetCount)
+        {
+            doubleStackTargetVisuals.Add(CreatePlacementTargetVisual($"DoubleStackTarget_{doubleStackTargetVisuals.Count + 1}", 2));
+        }
+    }
+
+    void HideAllDoubleStackTargetVisuals()
+    {
+        for (int i = 0; i < doubleStackTargetVisuals.Count; i++)
+        {
+            if (doubleStackTargetVisuals[i]?.Root != null && doubleStackTargetVisuals[i].Root.gameObject.activeSelf)
+            {
+                doubleStackTargetVisuals[i].Root.gameObject.SetActive(false);
+            }
+        }
+    }
+
+    void DestroyDoubleStackTargetVisuals()
+    {
+        for (int i = 0; i < doubleStackTargetVisuals.Count; i++)
+        {
+            PlacementTargetVisual visual = doubleStackTargetVisuals[i];
+            if (visual == null)
+            {
+                continue;
+            }
+
+            if (visual.SurfaceMaterial != null)
+            {
+                Destroy(visual.SurfaceMaterial);
+            }
+
+            for (int materialIndex = 0; materialIndex < visual.SymbolMaterials.Count; materialIndex++)
+            {
+                if (visual.SymbolMaterials[materialIndex] != null)
+                {
+                    Destroy(visual.SymbolMaterials[materialIndex]);
+                }
+            }
+
+            for (int materialIndex = 0; materialIndex < visual.PreviewCubeMaterials.Count; materialIndex++)
+            {
+                if (visual.PreviewCubeMaterials[materialIndex] != null)
+                {
+                    Destroy(visual.PreviewCubeMaterials[materialIndex]);
+                }
+            }
+
+            for (int materialIndex = 0; materialIndex < visual.PreviewStatusMaterials.Count; materialIndex++)
+            {
+                if (visual.PreviewStatusMaterials[materialIndex] != null)
+                {
+                    Destroy(visual.PreviewStatusMaterials[materialIndex]);
+                }
+            }
+
+            if (visual.Root != null)
+            {
+                Destroy(visual.Root.gameObject);
+            }
+        }
+
+        doubleStackTargetVisuals.Clear();
     }
 
     void UpdateStackHudTransform()
@@ -982,9 +1327,50 @@ public class CameraFeedViewer : MonoBehaviour
                 placementTargetVisual.Root.gameObject.SetActive(false);
             }
 
+            HideAllColorPlacementPadVisuals();
+
             return;
         }
 
+        switch (activeDemoTask)
+        {
+            case DemoTaskType.Task1Stack:
+                UpdateStackingTaskVisual();
+                HideAllColorPlacementPadVisuals();
+                HideAllDoubleStackTargetVisuals();
+                break;
+            case DemoTaskType.Task2Placement:
+                if (placementTargetVisual?.Root != null && placementTargetVisual.Root.gameObject.activeSelf)
+                {
+                    placementTargetVisual.Root.gameObject.SetActive(false);
+                }
+
+                UpdateColorPlacementTaskVisual();
+                HideAllDoubleStackTargetVisuals();
+                break;
+            case DemoTaskType.Task3DoubleStack:
+                if (placementTargetVisual?.Root != null && placementTargetVisual.Root.gameObject.activeSelf)
+                {
+                    placementTargetVisual.Root.gameObject.SetActive(false);
+                }
+
+                HideAllColorPlacementPadVisuals();
+                UpdateDoubleStackTaskVisual();
+                break;
+            default:
+                if (placementTargetVisual?.Root != null && placementTargetVisual.Root.gameObject.activeSelf)
+                {
+                    placementTargetVisual.Root.gameObject.SetActive(false);
+                }
+
+                HideAllColorPlacementPadVisuals();
+                HideAllDoubleStackTargetVisuals();
+                break;
+        }
+    }
+
+    void UpdateStackingTaskVisual()
+    {
         EnsurePlacementTargetInfrastructure();
         RefreshCubeTrackersIfNeeded();
 
@@ -1018,8 +1404,138 @@ public class CameraFeedViewer : MonoBehaviour
         placementTargetVisual.SymbolRoot.localRotation = Quaternion.identity;
         placementTargetVisual.SymbolRoot.localScale = Vector3.one;
 
-        UpdatePlacementTargetSymbol(bottomCubeCorrect, statusColor);
-        UpdatePlacementTaskPreview(worldPosition);
+        UpdatePlacementTargetSymbol(placementTargetVisual, bottomCubeCorrect, statusColor);
+        UpdatePlacementTaskPreview(placementTargetVisual, worldPosition, placementTaskRequirements, 0, placementTaskRequirements.Count);
+    }
+
+    void UpdateColorPlacementTaskVisual()
+    {
+        RefreshCubeTrackersIfNeeded();
+
+        if (!TryGetTableOriginPose(out Pose tablePose) || colorPlacementRequirements.Count <= 0 || colorPlacementOffsets.Count != colorPlacementRequirements.Count)
+        {
+            HideAllColorPlacementPadVisuals();
+            return;
+        }
+
+        EnsureColorPlacementPadVisualCount(colorPlacementRequirements.Count);
+
+        bool allPadsCorrect = true;
+        for (int i = 0; i < colorPlacementPadVisuals.Count; i++)
+        {
+            bool shouldShow = i < colorPlacementRequirements.Count;
+            PlacementPadVisual visual = colorPlacementPadVisuals[i];
+            if (visual?.Root == null)
+            {
+                continue;
+            }
+
+            if (visual.Root.gameObject.activeSelf != shouldShow)
+            {
+                visual.Root.gameObject.SetActive(shouldShow);
+            }
+
+            if (!shouldShow)
+            {
+                continue;
+            }
+
+            PlacementTaskRequirement requirement = colorPlacementRequirements[i];
+            Vector2 targetOffset = colorPlacementOffsets[i];
+            Vector3 worldPosition = new Vector3(
+                tablePose.position.x + targetOffset.x,
+                tablePose.position.y,
+                tablePose.position.z + targetOffset.y);
+            bool isCorrect = IsSpecificCubeAtPlacementTarget(requirement.CubeId, worldPosition);
+            allPadsCorrect &= isCorrect;
+
+            visual.Root.position = worldPosition;
+            visual.Root.rotation = Quaternion.identity;
+            visual.SurfaceMarker.localPosition = new Vector3(0f, placementTargetSurfaceLiftMeters, 0f);
+            float markerRadius = placementTargetSurfaceSizeMeters * 0.5f;
+            visual.SurfaceMarker.localScale = new Vector3(markerRadius * 2f, placementTargetSurfaceThicknessMeters * 0.5f, markerRadius * 2f);
+            SetMaterialColor(visual.SurfaceMaterial, requirement.Color);
+            if (visual.SymbolRoot != null)
+            {
+                visual.SymbolRoot.localPosition = new Vector3(0f, placementTargetIndicatorHeightMeters, 0f);
+                visual.SymbolRoot.localRotation = Quaternion.identity;
+                visual.SymbolRoot.localScale = Vector3.one;
+            }
+
+            UpdatePadStatusSymbol(visual, isCorrect, isCorrect ? new Color(0.2f, 1f, 0.3f, 1f) : new Color(1f, 0.25f, 0.25f, 1f));
+        }
+
+        if (allPadsCorrect && !hasCompletedPlacementTask)
+        {
+            hasCompletedPlacementTask = true;
+            isPlacementTaskActive = false;
+            TaskCompleted?.Invoke(DemoTaskType.Task2Placement);
+        }
+    }
+
+    void UpdateDoubleStackTaskVisual()
+    {
+        RefreshCubeTrackersIfNeeded();
+
+        if (!TryGetTableOriginPose(out Pose tablePose) || doubleStackRequirements.Count < 4 || doubleStackTargetOffsets.Count != 2)
+        {
+            HideAllDoubleStackTargetVisuals();
+            return;
+        }
+
+        EnsureDoubleStackTargetVisualCount(2);
+
+        bool allStacksCorrect = true;
+        for (int targetIndex = 0; targetIndex < doubleStackTargetVisuals.Count; targetIndex++)
+        {
+            bool shouldShow = targetIndex < 2;
+            PlacementTargetVisual visual = doubleStackTargetVisuals[targetIndex];
+            if (visual?.Root == null)
+            {
+                continue;
+            }
+
+            if (visual.Root.gameObject.activeSelf != shouldShow)
+            {
+                visual.Root.gameObject.SetActive(shouldShow);
+            }
+
+            if (!shouldShow)
+            {
+                continue;
+            }
+
+            Vector2 targetOffset = doubleStackTargetOffsets[targetIndex];
+            Vector3 worldPosition = new Vector3(
+                tablePose.position.x + targetOffset.x,
+                tablePose.position.y,
+                tablePose.position.z + targetOffset.y);
+            int requirementStartIndex = targetIndex * 2;
+            bool bottomCubeCorrect = IsSpecificCubeAtPlacementTarget(doubleStackRequirements[requirementStartIndex].CubeId, worldPosition);
+            Color statusColor = bottomCubeCorrect ? new Color(0.2f, 1f, 0.3f, 1f) : new Color(1f, 0.25f, 0.25f, 1f);
+
+            visual.Root.position = worldPosition;
+            visual.Root.rotation = Quaternion.identity;
+            float markerRadius = placementTargetSurfaceSizeMeters * 0.5f;
+            visual.SurfaceMarker.localPosition = new Vector3(0f, placementTargetSurfaceLiftMeters, 0f);
+            visual.SurfaceMarker.localScale = new Vector3(markerRadius * 2f, placementTargetSurfaceThicknessMeters * 0.5f, markerRadius * 2f);
+            SetMaterialColor(visual.SurfaceMaterial, doubleStackRequirements[requirementStartIndex].Color);
+
+            visual.SymbolRoot.localPosition = new Vector3(0f, placementTargetIndicatorHeightMeters, 0f);
+            visual.SymbolRoot.localRotation = Quaternion.identity;
+            visual.SymbolRoot.localScale = Vector3.one;
+            UpdatePlacementTargetSymbol(visual, bottomCubeCorrect, statusColor);
+
+            bool stackCorrect = UpdatePlacementTaskPreview(visual, worldPosition, doubleStackRequirements, requirementStartIndex, 2);
+            allStacksCorrect &= stackCorrect;
+        }
+
+        if (allStacksCorrect && !hasCompletedPlacementTask)
+        {
+            hasCompletedPlacementTask = true;
+            isPlacementTaskActive = false;
+            TaskCompleted?.Invoke(DemoTaskType.Task3DoubleStack);
+        }
     }
 
     void RefreshCubeTrackersIfNeeded()
@@ -1077,7 +1593,12 @@ public class CameraFeedViewer : MonoBehaviour
 
     bool IsTargetCubeAtPlacementTarget(Vector3 targetWorldPosition)
     {
-        if (placementTargetCubeId < 0)
+        return IsSpecificCubeAtPlacementTarget(placementTargetCubeId, targetWorldPosition);
+    }
+
+    bool IsSpecificCubeAtPlacementTarget(int cubeId, Vector3 targetWorldPosition)
+    {
+        if (cubeId < 0)
         {
             return false;
         }
@@ -1088,7 +1609,7 @@ public class CameraFeedViewer : MonoBehaviour
         for (int i = 0; i < cubeTrackers.Count; i++)
         {
             ArucoCubeTracker tracker = cubeTrackers[i];
-            if (tracker == null || tracker.CubeMarkerId != placementTargetCubeId)
+            if (tracker == null || tracker.CubeMarkerId != cubeId)
             {
                 continue;
             }
@@ -1147,42 +1668,149 @@ public class CameraFeedViewer : MonoBehaviour
         return true;
     }
 
-    void UpdatePlacementTaskPreview(Vector3 targetWorldPosition)
+    bool TryGenerateColorPlacementRequirements()
     {
-        if (placementTargetVisual == null || placementTargetVisual.TaskPreviewRoot == null)
+        colorPlacementRequirements.Clear();
+
+        List<ArucoCubeTracker> validTrackers = new List<ArucoCubeTracker>(cubeTrackers.Count);
+        for (int i = 0; i < cubeTrackers.Count; i++)
+        {
+            if (cubeTrackers[i] != null)
+            {
+                validTrackers.Add(cubeTrackers[i]);
+            }
+        }
+
+        if (validTrackers.Count < 4)
+        {
+            return false;
+        }
+
+        validTrackers.Sort((a, b) => a.CubeMarkerId.CompareTo(b.CubeMarkerId));
+
+        for (int i = 0; i < 4; i++)
+        {
+            colorPlacementRequirements.Add(new PlacementTaskRequirement
+            {
+                CubeId = validTrackers[i].CubeMarkerId,
+                Color = validTrackers[i].CubeColor,
+                CubeSize = Mathf.Max(0.001f, validTrackers[i].CubeSizeMeters)
+            });
+        }
+
+        return true;
+    }
+
+    bool TryGenerateDoubleStackRequirements()
+    {
+        doubleStackRequirements.Clear();
+
+        List<ArucoCubeTracker> validTrackers = new List<ArucoCubeTracker>(cubeTrackers.Count);
+        for (int i = 0; i < cubeTrackers.Count; i++)
+        {
+            if (cubeTrackers[i] != null)
+            {
+                validTrackers.Add(cubeTrackers[i]);
+            }
+        }
+
+        if (validTrackers.Count < 4)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < validTrackers.Count; i++)
+        {
+            int swapIndex = UnityEngine.Random.Range(i, validTrackers.Count);
+            ArucoCubeTracker temp = validTrackers[i];
+            validTrackers[i] = validTrackers[swapIndex];
+            validTrackers[swapIndex] = temp;
+        }
+
+        for (int i = 0; i < 4; i++)
+        {
+            doubleStackRequirements.Add(new PlacementTaskRequirement
+            {
+                CubeId = validTrackers[i].CubeMarkerId,
+                Color = validTrackers[i].CubeColor,
+                CubeSize = Mathf.Max(0.001f, validTrackers[i].CubeSizeMeters)
+            });
+        }
+
+        return true;
+    }
+
+    void RandomizeColorPlacementTargets()
+    {
+        colorPlacementOffsets.Clear();
+        if (colorPlacementRequirements.Count <= 0)
         {
             return;
         }
 
-        bool shouldShowPreview = placementTaskRequirements.Count > 0;
-        if (placementTargetVisual.TaskPreviewRoot.gameObject.activeSelf != shouldShowPreview)
+        float baseAngleDegrees = UnityEngine.Random.Range(0f, 360f);
+        float rotationJitter = Mathf.Max(0f, colorPlacementPadRotationJitterDegrees);
+        float radius = Mathf.Max(0.08f, colorPlacementPadRadiusMeters);
+
+        for (int i = 0; i < colorPlacementRequirements.Count; i++)
         {
-            placementTargetVisual.TaskPreviewRoot.gameObject.SetActive(shouldShowPreview);
+            float angleDegrees = baseAngleDegrees + (i * (360f / colorPlacementRequirements.Count));
+            angleDegrees += UnityEngine.Random.Range(-rotationJitter, rotationJitter);
+            float angleRadians = angleDegrees * Mathf.Deg2Rad;
+            colorPlacementOffsets.Add(new Vector2(Mathf.Cos(angleRadians), Mathf.Sin(angleRadians)) * radius);
+        }
+    }
+
+    void RandomizeDoubleStackTargets()
+    {
+        doubleStackTargetOffsets.Clear();
+        float baseAngleDegrees = UnityEngine.Random.Range(0f, 360f);
+        float radius = Mathf.Max(0.08f, colorPlacementPadRadiusMeters);
+
+        for (int i = 0; i < 2; i++)
+        {
+            float angleDegrees = baseAngleDegrees + (i * 180f);
+            float angleRadians = angleDegrees * Mathf.Deg2Rad;
+            doubleStackTargetOffsets.Add(new Vector2(Mathf.Cos(angleRadians), Mathf.Sin(angleRadians)) * radius);
+        }
+    }
+
+    bool UpdatePlacementTaskPreview(PlacementTargetVisual visual, Vector3 targetWorldPosition, List<PlacementTaskRequirement> requirements, int requirementStartIndex, int requirementCount)
+    {
+        if (visual == null || visual.TaskPreviewRoot == null)
+        {
+            return false;
+        }
+
+        bool shouldShowPreview = requirementCount > 0;
+        if (visual.TaskPreviewRoot.gameObject.activeSelf != shouldShowPreview)
+        {
+            visual.TaskPreviewRoot.gameObject.SetActive(shouldShowPreview);
         }
 
         if (!shouldShowPreview)
         {
-            return;
+            return false;
         }
 
-        placementTargetVisual.TaskPreviewRoot.position = targetWorldPosition + placementTaskPreviewLocalOffset;
-        placementTargetVisual.TaskPreviewRoot.rotation = Quaternion.identity;
-        placementTargetVisual.TaskPreviewRoot.localScale = Vector3.one;
+        visual.TaskPreviewRoot.position = targetWorldPosition + placementTaskPreviewLocalOffset;
+        visual.TaskPreviewRoot.rotation = Quaternion.identity;
+        visual.TaskPreviewRoot.localScale = Vector3.one;
 
         DetectedStack matchingStack = FindDetectedStackNearPlacementTarget(targetWorldPosition);
-        bool isTaskComplete = IsPlacementTaskComplete(matchingStack);
+        bool isTaskComplete = IsPlacementTaskComplete(matchingStack, requirements, requirementStartIndex, requirementCount);
 
         float cubeSize = Mathf.Max(0.01f, placementTaskPreviewCubeSizeMeters);
         float cubeDepth = cubeSize;
         float gap = Mathf.Max(0f, placementTaskPreviewCubeGapMeters);
-        float totalHeight = (placementTaskRequirements.Count * cubeSize) + (Mathf.Max(0, placementTaskRequirements.Count - 1) * gap);
+        float totalHeight = (requirementCount * cubeSize) + (Mathf.Max(0, requirementCount - 1) * gap);
         float statusOffset = Mathf.Max(cubeSize * 0.8f, placementTaskPreviewStatusOffsetMeters);
 
-        for (int i = 0; i < placementTargetVisual.PreviewCubes.Count; i++)
+        for (int i = 0; i < visual.PreviewCubes.Count; i++)
         {
-            bool shouldShowCube = i < placementTaskRequirements.Count;
-            placementTargetVisual.PreviewCubes[i].gameObject.SetActive(shouldShowCube);
-            placementTargetVisual.PreviewStatusRoots[i].gameObject.SetActive(shouldShowCube);
+            bool shouldShowCube = i < requirementCount;
+            visual.PreviewCubes[i].gameObject.SetActive(shouldShowCube);
+            visual.PreviewStatusRoots[i].gameObject.SetActive(shouldShowCube);
 
             if (!shouldShowCube)
             {
@@ -1190,19 +1818,20 @@ public class CameraFeedViewer : MonoBehaviour
             }
 
             float y = -totalHeight * 0.5f + (i * (cubeSize + gap)) + (cubeSize * 0.5f);
-            placementTargetVisual.PreviewCubes[i].localPosition = new Vector3(0f, y, 0f);
-            placementTargetVisual.PreviewCubes[i].localRotation = Quaternion.identity;
-            placementTargetVisual.PreviewCubes[i].localScale = new Vector3(cubeSize, cubeSize, cubeDepth);
-            SetMaterialColor(placementTargetVisual.PreviewCubeMaterials[i], placementTaskRequirements[i].Color);
+            int requirementIndex = requirementStartIndex + i;
+            visual.PreviewCubes[i].localPosition = new Vector3(0f, y, 0f);
+            visual.PreviewCubes[i].localRotation = Quaternion.identity;
+            visual.PreviewCubes[i].localScale = new Vector3(cubeSize, cubeSize, cubeDepth);
+            SetMaterialColor(visual.PreviewCubeMaterials[i], requirements[requirementIndex].Color);
 
             bool isCorrect = matchingStack != null &&
                 i < matchingStack.Cubes.Count &&
-                matchingStack.Cubes[i].CubeId == placementTaskRequirements[i].CubeId;
+                matchingStack.Cubes[i].CubeId == requirements[requirementIndex].CubeId;
 
-            placementTargetVisual.PreviewStatusRoots[i].localPosition = new Vector3(statusOffset, y, 0f);
-            placementTargetVisual.PreviewStatusRoots[i].localRotation = Quaternion.identity;
-            placementTargetVisual.PreviewStatusRoots[i].localScale = Vector3.one;
-            UpdatePreviewStatusSymbol(i, isCorrect);
+            visual.PreviewStatusRoots[i].localPosition = new Vector3(statusOffset, y, 0f);
+            visual.PreviewStatusRoots[i].localRotation = Quaternion.identity;
+            visual.PreviewStatusRoots[i].localScale = Vector3.one;
+            UpdatePreviewStatusSymbol(visual, i, isCorrect);
         }
 
         if (isTaskComplete && !hasCompletedPlacementTask)
@@ -1210,26 +1839,28 @@ public class CameraFeedViewer : MonoBehaviour
             hasCompletedPlacementTask = true;
             isPlacementTaskActive = false;
             hasPlacementTarget = false;
-            StackingTaskCompleted?.Invoke();
+            TaskCompleted?.Invoke(DemoTaskType.Task1Stack);
         }
+
+        return isTaskComplete;
     }
 
-    bool IsPlacementTaskComplete(DetectedStack matchingStack)
+    bool IsPlacementTaskComplete(DetectedStack matchingStack, List<PlacementTaskRequirement> requirements, int requirementStartIndex, int requirementCount)
     {
-        if (matchingStack == null || matchingStack.Cubes.Count < placementTaskRequirements.Count)
+        if (matchingStack == null || matchingStack.Cubes.Count < requirementCount)
         {
             return false;
         }
 
-        for (int i = 0; i < placementTaskRequirements.Count; i++)
+        for (int i = 0; i < requirementCount; i++)
         {
-            if (matchingStack.Cubes[i].CubeId != placementTaskRequirements[i].CubeId)
+            if (matchingStack.Cubes[i].CubeId != requirements[requirementStartIndex + i].CubeId)
             {
                 return false;
             }
         }
 
-        return placementTaskRequirements.Count > 0;
+        return requirementCount > 0;
     }
 
     DetectedStack FindDetectedStackNearPlacementTarget(Vector3 targetWorldPosition)
@@ -1268,24 +1899,24 @@ public class CameraFeedViewer : MonoBehaviour
         return bestStack;
     }
 
-    void UpdatePreviewStatusSymbol(int requirementIndex, bool showCheck)
+    void UpdatePreviewStatusSymbol(PlacementTargetVisual visual, int requirementIndex, bool showCheck)
     {
         int baseIndex = requirementIndex * 2;
-        if (baseIndex + 1 >= placementTargetVisual.PreviewStatusRenderers.Count)
+        if (baseIndex + 1 >= visual.PreviewStatusRenderers.Count)
         {
             return;
         }
 
-        Transform statusRoot = placementTargetVisual.PreviewStatusRoots[requirementIndex];
-        Transform segmentA = placementTargetVisual.PreviewStatusRenderers[baseIndex].transform;
-        Transform segmentB = placementTargetVisual.PreviewStatusRenderers[baseIndex + 1].transform;
+        Transform statusRoot = visual.PreviewStatusRoots[requirementIndex];
+        Transform segmentA = visual.PreviewStatusRenderers[baseIndex].transform;
+        Transform segmentB = visual.PreviewStatusRenderers[baseIndex + 1].transform;
 
         float thickness = Mathf.Max(0.002f, placementTaskPreviewStatusScaleMeters * 0.18f);
         float length = Mathf.Max(0.005f, placementTaskPreviewStatusScaleMeters);
         Color symbolColor = showCheck ? new Color(0.2f, 1f, 0.3f, 1f) : new Color(1f, 0.25f, 0.25f, 1f);
 
-        SetMaterialColor(placementTargetVisual.PreviewStatusMaterials[baseIndex], symbolColor);
-        SetMaterialColor(placementTargetVisual.PreviewStatusMaterials[baseIndex + 1], symbolColor);
+        SetMaterialColor(visual.PreviewStatusMaterials[baseIndex], symbolColor);
+        SetMaterialColor(visual.PreviewStatusMaterials[baseIndex + 1], symbolColor);
 
         if (showCheck)
         {
@@ -1309,50 +1940,92 @@ public class CameraFeedViewer : MonoBehaviour
         }
     }
 
-    void UpdatePlacementTargetSymbol(bool showCheck, Color symbolColor)
+    void UpdatePlacementTargetSymbol(PlacementTargetVisual visual, bool showCheck, Color symbolColor)
     {
         float thickness = placementTargetIndicatorScaleMeters * 0.18f;
         float length = placementTargetIndicatorScaleMeters;
 
-        for (int i = 0; i < placementTargetVisual.SymbolSegments.Count; i++)
+        for (int i = 0; i < visual.SymbolSegments.Count; i++)
         {
             bool shouldShow = showCheck ? i < 2 : i < 2;
-            if (placementTargetVisual.SymbolSegments[i].gameObject.activeSelf != shouldShow)
+            if (visual.SymbolSegments[i].gameObject.activeSelf != shouldShow)
             {
-                placementTargetVisual.SymbolSegments[i].gameObject.SetActive(shouldShow);
+                visual.SymbolSegments[i].gameObject.SetActive(shouldShow);
             }
 
             if (shouldShow)
             {
-                SetMaterialColor(placementTargetVisual.SymbolMaterials[i], symbolColor);
+                SetMaterialColor(visual.SymbolMaterials[i], symbolColor);
             }
         }
 
         if (showCheck)
         {
-            placementTargetVisual.SymbolSegments[0].localPosition = new Vector3(-length * 0.18f, -length * 0.08f, 0f);
-            placementTargetVisual.SymbolSegments[0].localRotation = Quaternion.Euler(0f, 0f, 45f);
-            placementTargetVisual.SymbolSegments[0].localScale = new Vector3(thickness, length * 0.45f, thickness);
+            visual.SymbolSegments[0].localPosition = new Vector3(-length * 0.18f, -length * 0.08f, 0f);
+            visual.SymbolSegments[0].localRotation = Quaternion.Euler(0f, 0f, 45f);
+            visual.SymbolSegments[0].localScale = new Vector3(thickness, length * 0.45f, thickness);
 
-            placementTargetVisual.SymbolSegments[1].localPosition = new Vector3(length * 0.05f, length * 0.08f, 0f);
-            placementTargetVisual.SymbolSegments[1].localRotation = Quaternion.Euler(0f, 0f, -45f);
-            placementTargetVisual.SymbolSegments[1].localScale = new Vector3(thickness, length * 0.9f, thickness);
+            visual.SymbolSegments[1].localPosition = new Vector3(length * 0.05f, length * 0.08f, 0f);
+            visual.SymbolSegments[1].localRotation = Quaternion.Euler(0f, 0f, -45f);
+            visual.SymbolSegments[1].localScale = new Vector3(thickness, length * 0.9f, thickness);
         }
         else
         {
-            placementTargetVisual.SymbolSegments[0].localPosition = Vector3.zero;
-            placementTargetVisual.SymbolSegments[0].localRotation = Quaternion.Euler(0f, 0f, 45f);
-            placementTargetVisual.SymbolSegments[0].localScale = new Vector3(thickness, length, thickness);
+            visual.SymbolSegments[0].localPosition = Vector3.zero;
+            visual.SymbolSegments[0].localRotation = Quaternion.Euler(0f, 0f, 45f);
+            visual.SymbolSegments[0].localScale = new Vector3(thickness, length, thickness);
 
-            placementTargetVisual.SymbolSegments[1].localPosition = Vector3.zero;
-            placementTargetVisual.SymbolSegments[1].localRotation = Quaternion.Euler(0f, 0f, -45f);
-            placementTargetVisual.SymbolSegments[1].localScale = new Vector3(thickness, length, thickness);
+            visual.SymbolSegments[1].localPosition = Vector3.zero;
+            visual.SymbolSegments[1].localRotation = Quaternion.Euler(0f, 0f, -45f);
+            visual.SymbolSegments[1].localScale = new Vector3(thickness, length, thickness);
         }
 
-        if (placementTargetVisual.SymbolSegments.Count > 2 &&
-            placementTargetVisual.SymbolSegments[2].gameObject.activeSelf)
+        if (visual.SymbolSegments.Count > 2 &&
+            visual.SymbolSegments[2].gameObject.activeSelf)
         {
-            placementTargetVisual.SymbolSegments[2].gameObject.SetActive(false);
+            visual.SymbolSegments[2].gameObject.SetActive(false);
+        }
+    }
+
+    void UpdatePadStatusSymbol(PlacementPadVisual visual, bool showCheck, Color symbolColor)
+    {
+        if (visual == null || visual.SymbolSegments.Count < 2)
+        {
+            return;
+        }
+
+        float thickness = placementTargetIndicatorScaleMeters * 0.18f;
+        float length = placementTargetIndicatorScaleMeters;
+
+        for (int i = 0; i < visual.SymbolSegments.Count; i++)
+        {
+            bool shouldShow = i < 2;
+            if (visual.SymbolSegments[i].gameObject.activeSelf != shouldShow)
+            {
+                visual.SymbolSegments[i].gameObject.SetActive(shouldShow);
+            }
+
+            if (shouldShow && i < visual.SymbolMaterials.Count)
+            {
+                SetMaterialColor(visual.SymbolMaterials[i], symbolColor);
+            }
+        }
+
+        visual.SymbolSegments[0].localPosition = showCheck ? new Vector3(-length * 0.18f, -length * 0.08f, 0f) : Vector3.zero;
+        visual.SymbolSegments[0].localRotation = Quaternion.Euler(0f, 0f, 45f);
+        visual.SymbolSegments[0].localScale = showCheck
+            ? new Vector3(thickness, length * 0.45f, thickness)
+            : new Vector3(thickness, length, thickness);
+
+        visual.SymbolSegments[1].localPosition = showCheck ? new Vector3(length * 0.05f, length * 0.08f, 0f) : Vector3.zero;
+        visual.SymbolSegments[1].localRotation = Quaternion.Euler(0f, 0f, -45f);
+        visual.SymbolSegments[1].localScale = showCheck
+            ? new Vector3(thickness, length * 0.9f, thickness)
+            : new Vector3(thickness, length, thickness);
+
+        if (visual.SymbolSegments.Count > 2 && visual.SymbolSegments[2].gameObject.activeSelf)
+        {
+            visual.SymbolSegments[2].gameObject.SetActive(false);
         }
     }
 
@@ -1629,6 +2302,7 @@ public class CameraFeedViewer : MonoBehaviour
         DestroyMarkerVisualSet(worldMarkerVisuals);
         DestroyStackHudVisuals();
         DestroyPlacementTargetVisual();
+        DestroyColorPlacementPadVisuals();
     }
 
     int DetectMarkerCount(byte[] image, int width, int height)
