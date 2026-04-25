@@ -1405,7 +1405,14 @@ public class CameraFeedViewer : MonoBehaviour
         placementTargetVisual.SymbolRoot.localScale = Vector3.one;
 
         UpdatePlacementTargetSymbol(placementTargetVisual, bottomCubeCorrect, statusColor);
-        UpdatePlacementTaskPreview(placementTargetVisual, worldPosition, placementTaskRequirements, 0, placementTaskRequirements.Count);
+        bool isTaskComplete = UpdatePlacementTaskPreview(placementTargetVisual, worldPosition, placementTaskRequirements, 0, placementTaskRequirements.Count);
+        if (activeDemoTask == DemoTaskType.Task1Stack && isTaskComplete && !hasCompletedPlacementTask)
+        {
+            hasCompletedPlacementTask = true;
+            isPlacementTaskActive = false;
+            hasPlacementTarget = false;
+            TaskCompleted?.Invoke(DemoTaskType.Task1Stack);
+        }
     }
 
     void UpdateColorPlacementTaskVisual()
@@ -1465,7 +1472,7 @@ public class CameraFeedViewer : MonoBehaviour
             UpdatePadStatusSymbol(visual, isCorrect, isCorrect ? new Color(0.2f, 1f, 0.3f, 1f) : new Color(1f, 0.25f, 0.25f, 1f));
         }
 
-        if (allPadsCorrect && !hasCompletedPlacementTask)
+        if (activeDemoTask == DemoTaskType.Task2Placement && allPadsCorrect && !hasCompletedPlacementTask)
         {
             hasCompletedPlacementTask = true;
             isPlacementTaskActive = false;
@@ -1530,7 +1537,7 @@ public class CameraFeedViewer : MonoBehaviour
             allStacksCorrect &= stackCorrect;
         }
 
-        if (allStacksCorrect && !hasCompletedPlacementTask)
+        if (activeDemoTask == DemoTaskType.Task3DoubleStack && allStacksCorrect && !hasCompletedPlacementTask)
         {
             hasCompletedPlacementTask = true;
             isPlacementTaskActive = false;
@@ -1832,14 +1839,6 @@ public class CameraFeedViewer : MonoBehaviour
             visual.PreviewStatusRoots[i].localRotation = Quaternion.identity;
             visual.PreviewStatusRoots[i].localScale = Vector3.one;
             UpdatePreviewStatusSymbol(visual, i, isCorrect);
-        }
-
-        if (isTaskComplete && !hasCompletedPlacementTask)
-        {
-            hasCompletedPlacementTask = true;
-            isPlacementTaskActive = false;
-            hasPlacementTarget = false;
-            TaskCompleted?.Invoke(DemoTaskType.Task1Stack);
         }
 
         return isTaskComplete;
