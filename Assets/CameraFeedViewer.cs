@@ -511,7 +511,7 @@ public class CameraFeedViewer : MonoBehaviour
         visual.SurfaceRenderer = surface.GetComponent<Renderer>();
         visual.SurfaceRenderer.shadowCastingMode = ShadowCastingMode.Off;
         visual.SurfaceRenderer.receiveShadows = false;
-        visual.SurfaceMaterial = CreateHudCellMaterial();
+        visual.SurfaceMaterial = CreatePlacementPadSurfaceMaterial();
         visual.SurfaceRenderer.sharedMaterial = visual.SurfaceMaterial;
 
         GameObject symbolRootObject = new GameObject("StatusSymbol");
@@ -617,7 +617,7 @@ public class CameraFeedViewer : MonoBehaviour
         visual.SurfaceRenderer = surface.GetComponent<Renderer>();
         visual.SurfaceRenderer.shadowCastingMode = ShadowCastingMode.Off;
         visual.SurfaceRenderer.receiveShadows = false;
-        visual.SurfaceMaterial = CreateHudCellMaterial();
+        visual.SurfaceMaterial = CreatePlacementPadSurfaceMaterial();
         visual.SurfaceRenderer.sharedMaterial = visual.SurfaceMaterial;
 
         GameObject symbolRootObject = new GameObject("StatusSymbol");
@@ -767,7 +767,7 @@ public class CameraFeedViewer : MonoBehaviour
         surfaceRenderer.shadowCastingMode = ShadowCastingMode.Off;
         surfaceRenderer.receiveShadows = false;
         visual.SurfaceMarker = surface.transform;
-        visual.SurfaceMaterial = CreateHudCellMaterial();
+        visual.SurfaceMaterial = CreatePlacementPadSurfaceMaterial();
         surfaceRenderer.sharedMaterial = visual.SurfaceMaterial;
 
         GameObject symbolRootObject = new GameObject("StatusSymbol");
@@ -2207,6 +2207,44 @@ public class CameraFeedViewer : MonoBehaviour
             material.SetColor("_Color", Color.white);
         }
 
+        return material;
+    }
+
+    Material CreatePlacementPadSurfaceMaterial()
+    {
+        Material material = CreateHudCellMaterial();
+
+        if (material.HasProperty("_Surface"))
+        {
+            material.SetFloat("_Surface", 0f);
+        }
+
+        if (material.HasProperty("_Blend"))
+        {
+            material.SetFloat("_Blend", 0f);
+        }
+
+        if (material.HasProperty("_SrcBlend"))
+        {
+            material.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.One);
+        }
+
+        if (material.HasProperty("_DstBlend"))
+        {
+            material.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.Zero);
+        }
+
+        if (material.HasProperty("_ZWrite"))
+        {
+            material.SetFloat("_ZWrite", 1f);
+        }
+
+        if (material.HasProperty("_ZTest"))
+        {
+            material.SetFloat("_ZTest", (float)UnityEngine.Rendering.CompareFunction.LessEqual);
+        }
+
+        material.renderQueue = 2500;
         return material;
     }
 
