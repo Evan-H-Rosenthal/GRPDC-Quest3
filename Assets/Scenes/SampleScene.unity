@@ -477,6 +477,8 @@ MonoBehaviour:
   placementTaskPreviewCubeGapMeters: 0.008
   placementTaskPreviewStatusOffsetMeters: 0.04
   placementTaskPreviewStatusScaleMeters: 0.02
+  colorPlacementPadRadiusMeters: 0.18
+  colorPlacementPadRotationJitterDegrees: 20
 --- !u!1 &256051031
 GameObject:
   m_ObjectHideFlags: 0
@@ -1258,6 +1260,7 @@ MonoBehaviour:
   leftButton: {fileID: 1589684940}
   rightButton: {fileID: 2101000104}
   cameraFeedViewer: {fileID: 0}
+  recorder: {fileID: 0}
 --- !u!1 &653101499
 GameObject:
   m_ObjectHideFlags: 0
@@ -2393,7 +2396,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &1505918409
 Transform:
   m_ObjectHideFlags: 0
@@ -3501,6 +3504,12 @@ MonoBehaviour:
   cubeSizeMeters: 0.0762
   poseHoldSeconds: 0.4
   poseSmoothing: 12
+  useAdaptivePoseSmoothing: 1
+  stationaryPoseSmoothing: 7
+  movingPoseSmoothing: 20
+  adaptivePositionRangeMeters: 0.035
+  adaptiveRotationRangeDegrees: 20
+  singleMarkerResponsivenessMultiplier: 0.8
   maxPositionJumpMeters: 0.08
   maxRotationJumpDegrees: 55
   outlierFramesBeforeSnap: 2
@@ -3581,6 +3590,12 @@ MonoBehaviour:
   cubeSizeMeters: 0.0762
   poseHoldSeconds: 0.4
   poseSmoothing: 12
+  useAdaptivePoseSmoothing: 1
+  stationaryPoseSmoothing: 7
+  movingPoseSmoothing: 20
+  adaptivePositionRangeMeters: 0.035
+  adaptiveRotationRangeDegrees: 20
+  singleMarkerResponsivenessMultiplier: 0.8
   maxPositionJumpMeters: 0.08
   maxRotationJumpDegrees: 55
   outlierFramesBeforeSnap: 2
@@ -3661,6 +3676,12 @@ MonoBehaviour:
   cubeSizeMeters: 0.0762
   poseHoldSeconds: 0.4
   poseSmoothing: 12
+  useAdaptivePoseSmoothing: 1
+  stationaryPoseSmoothing: 7
+  movingPoseSmoothing: 20
+  adaptivePositionRangeMeters: 0.035
+  adaptiveRotationRangeDegrees: 20
+  singleMarkerResponsivenessMultiplier: 0.8
   maxPositionJumpMeters: 0.08
   maxRotationJumpDegrees: 55
   outlierFramesBeforeSnap: 2
@@ -3741,6 +3762,12 @@ MonoBehaviour:
   cubeSizeMeters: 0.0762
   poseHoldSeconds: 0.4
   poseSmoothing: 12
+  useAdaptivePoseSmoothing: 1
+  stationaryPoseSmoothing: 7
+  movingPoseSmoothing: 20
+  adaptivePositionRangeMeters: 0.035
+  adaptiveRotationRangeDegrees: 20
+  singleMarkerResponsivenessMultiplier: 0.8
   maxPositionJumpMeters: 0.08
   maxRotationJumpDegrees: 55
   outlierFramesBeforeSnap: 2
